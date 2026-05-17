@@ -2404,7 +2404,7 @@ def build_review_checklist(records: List[Dict[str, str]], screened: List[Dict[st
 
 
 def render_journal_review_builder_tab():
-    st.subheader("📝 Jurnal Review Builder")
+    st.subheader("📝 Jurnal Review Builder dan Q-Level Toolkit")
     records = st.session_state.theme_records or st.session_state.records
     screened = st.session_state.screened
     meta_studies = st.session_state.meta_studies
@@ -2531,6 +2531,468 @@ def render_journal_review_builder_tab():
         )
 
 
+
+# =========================================================
+# Q-Level Journal Toolkit
+# =========================================================
+def qlevel_readiness_score(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> Dict[str, object]:
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    bq = bibliography_quality_score(records)
+    mr = meta_readiness_score(records, meta_studies)
+    has_prisma = 100 if screened else 0
+    has_rob = 100 if rob_rows else 0
+    has_review_draft = 100 if records else 0
+    has_sensitivity = 100 if len(meta_studies) >= 2 else 40 if len(meta_studies) == 1 else 0
+    has_pub_bias = 100 if len(meta_studies) >= 3 else 40 if len(meta_studies) == 2 else 0
+    data_size = min(100, len(records) * 2)
+    q_evidence = 100 if meta_result.get("k", 0) >= 10 else 75 if meta_result.get("k", 0) >= 5 else 45 if meta_result.get("k", 0) >= 2 else 20 if records else 0
+
+    score = (
+        bq["score"] * 0.20
+        + mr["score"] * 0.15
+        + has_prisma * 0.12
+        + has_rob * 0.10
+        + has_sensitivity * 0.08
+        + has_pub_bias * 0.05
+        + data_size * 0.10
+        + q_evidence * 0.10
+        + has_review_draft * 0.10
+    )
+
+    label = "Q1/Q2 ready draft" if score >= 80 else "Q2/Q3 developing" if score >= 65 else "Q3/Q4 draft level" if score >= 45 else "Needs major preparation"
+
+    missing = []
+    if len(records) < 30:
+        missing.append("Tambahkan jumlah literatur dan perluas database agar dataset lebih kuat.")
+    if not screened:
+        missing.append("Lengkapi PRISMA screening dan alasan eksklusi.")
+    if not rob_rows:
+        missing.append("Isi risk of bias/quality assessment dari full-text.")
+    if len(meta_studies) == 0:
+        missing.append("Isi effect size/SE dari full-text jika ingin meta-analysis.")
+    if len(meta_studies) < 3:
+        missing.append("Publication bias belum kuat karena jumlah studi meta-analysis kurang dari 3.")
+    if bq["score"] < 70:
+        missing.append("Perbaiki kualitas metadata: DOI, abstrak, keyword, dan validasi indeks jurnal.")
+
+    return {
+        "score": round(score, 1),
+        "label": label,
+        "components": {
+            "Bibliography quality": round(bq["score"], 1),
+            "Meta-analysis readiness": round(mr["score"], 1),
+            "PRISMA screening": has_prisma,
+            "Risk of bias": has_rob,
+            "Sensitivity analysis": has_sensitivity,
+            "Publication bias": has_pub_bias,
+            "Dataset size": data_size,
+            "Evidence strength": q_evidence,
+            "Draft completeness": has_review_draft,
+        },
+        "missing": missing
+    }
+
+
+def build_qlevel_checklist(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    m = get_metrics(records) if records else {"with_doi": 0, "with_abstract": 0}
+    total = len(records)
+
+    checks = [
+        {
+            "area": "Title",
+            "criterion": "Judul spesifik, memuat tema, metode review, dan jenis analisis.",
+            "status": "Ready" if theme else "Needs work",
+            "action": "Gunakan alternatif judul dari Jurnal Review Builder dan Q-Level Toolkit."
+        },
+        {
+            "area": "Abstract",
+            "criterion": "Abstrak terstruktur memuat background, objective, methods, results, conclusion.",
+            "status": "Ready" if records else "Needs work",
+            "action": "Gunakan draft abstract lalu edit sesuai target journal."
+        },
+        {
+            "area": "Introduction",
+            "criterion": "Pendahuluan menunjukkan gap, novelty, kontribusi, dan alasan review diperlukan.",
+            "status": "Ready" if records else "Needs work",
+            "action": "Gunakan bagian Gap & Novelty dan perkuat dengan referensi utama."
+        },
+        {
+            "area": "Search strategy",
+            "criterion": "Search string, database, rentang tahun, dan tanggal pencarian dilaporkan.",
+            "status": "Ready" if records else "Needs work",
+            "action": "Simpan search string dan cantumkan database yang digunakan."
+        },
+        {
+            "area": "PRISMA",
+            "criterion": "Alur identification, screening, eligibility, included jelas dan dapat direplikasi.",
+            "status": "Ready" if screened else "Missing",
+            "action": "Jalankan tab PRISMA & Screening dan export tabel screening."
+        },
+        {
+            "area": "Data quality",
+            "criterion": "DOI dan abstrak cukup lengkap untuk screening dan sitasi.",
+            "status": "Ready" if total and pct(m["with_doi"], total) >= 70 and pct(m["with_abstract"], total) >= 60 else "Needs work",
+            "action": "Lengkapi DOI/abstrak dari database atau full-text."
+        },
+        {
+            "area": "Bibliometric results",
+            "criterion": "Tren tahun, sumber, jurnal, keyword, dan insight bibliografi tersedia.",
+            "status": "Ready" if records else "Missing",
+            "action": "Gunakan tab Bibliografi dan Insight Akhir."
+        },
+        {
+            "area": "Meta-analysis",
+            "criterion": "Effect size, standard error, model, CI, p-value, dan heterogeneity dilaporkan.",
+            "status": "Ready" if meta_result.get("k", 0) >= 2 else "Optional/Needs extraction",
+            "action": "Isi format Excel meta-analysis dari full-text."
+        },
+        {
+            "area": "Risk of bias",
+            "criterion": "Kualitas studi dinilai dengan domain yang jelas.",
+            "status": "Ready" if rob_rows else "Missing",
+            "action": "Isi tab Risk of Bias berdasarkan full-text."
+        },
+        {
+            "area": "Sensitivity analysis",
+            "criterion": "Leave-one-out atau robustness check tersedia.",
+            "status": "Ready" if len(meta_studies) >= 2 else "Not enough studies",
+            "action": "Butuh minimal 2 studi valid."
+        },
+        {
+            "area": "Publication bias",
+            "criterion": "Funnel/Egger atau alasan tidak dilakukan dijelaskan.",
+            "status": "Ready" if len(meta_studies) >= 3 else "Explain limitation",
+            "action": "Jika studi kurang dari 3, tulis sebagai keterbatasan."
+        },
+        {
+            "area": "Discussion",
+            "criterion": "Pembahasan mengaitkan hasil, gap, novelty, implikasi, dan keterbatasan.",
+            "status": "Ready" if records else "Needs work",
+            "action": "Gunakan Jurnal Review Builder dan Q-Level Toolkit lalu perkuat dengan argumen kritis."
+        },
+        {
+            "area": "References",
+            "criterion": "Referensi mayoritas mutakhir, relevan, dan berasal dari jurnal bereputasi.",
+            "status": "Needs manual validation",
+            "action": "Validasi Scopus/WoS/SJR/JCR dan cek gaya sitasi target journal."
+        }
+    ]
+    return checks
+
+
+def build_qlevel_article_structure(theme: str, meta_result: Dict[str, object]) -> str:
+    theme = normalize_theme(theme)
+    has_meta = meta_result.get("k", 0) > 0
+    meta_part = """
+3.5 Meta-analysis results
+- Type of effect size
+- Fixed-effect result
+- Random-effects result
+- Heterogeneity: Q, tau², I²
+- Forest plot
+- Subgroup analysis
+- Sensitivity analysis
+- Publication bias
+""" if has_meta else """
+3.5 Meta-analysis readiness
+- Number of studies with extractable quantitative data
+- Missing effect size information
+- Recommended full-text extraction strategy
+- Explanation why quantitative pooling is not yet performed
+"""
+
+    return f"""Q-Level Review Article Structure for: {theme}
+
+TITLE
+- Specific, concise, and method-oriented.
+- Mention systematic review, bibliometric analysis, and meta-analysis if applicable.
+
+ABSTRACT
+- Background
+- Objective
+- Methods
+- Results
+- Conclusion
+- Keywords
+
+1. INTRODUCTION
+1.1 Background and importance of the topic
+1.2 Current state of research
+1.3 Research gap
+1.4 Novelty and contribution
+1.5 Research questions/objectives
+
+2. METHODS
+2.1 Review design
+2.2 Data sources and search strategy
+2.3 Eligibility criteria
+2.4 Screening and PRISMA flow
+2.5 Data extraction
+2.6 Bibliometric indicators
+2.7 Meta-analysis model and effect size calculation
+2.8 Risk of bias / quality assessment
+2.9 Sensitivity analysis and publication bias
+
+3. RESULTS
+3.1 PRISMA flow results
+3.2 Publication trend
+3.3 Source, journal, author, and keyword distribution
+3.4 Bibliographic quality and evidence readiness
+{meta_part}
+3.6 Risk of bias results
+
+4. DISCUSSION
+4.1 Main findings
+4.2 Comparison with previous reviews
+4.3 Interpretation of bibliographic patterns
+4.4 Interpretation of meta-analysis or evidence readiness
+4.5 Theoretical contribution
+4.6 Practical implications
+4.7 Future research agenda
+
+5. LIMITATIONS
+- Database limitation
+- Metadata limitation
+- Screening limitation
+- Risk of bias limitation
+- Meta-analysis limitation if effect size data are incomplete
+
+6. CONCLUSION
+- Concise synthesis of findings
+- Contribution to the field
+- Recommendation for future studies
+
+SUPPLEMENTARY MATERIALS
+- Search string
+- Screening table
+- Extracted data
+- Risk of bias table
+- Meta-analysis calculation table
+"""
+
+
+def build_contribution_statement(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> str:
+    theme = normalize_theme(theme)
+    if meta_result.get("k", 0):
+        return (
+            f"This review contributes to the literature on {theme} by integrating bibliometric mapping with quantitative evidence synthesis. "
+            f"Unlike narrative reviews, this study provides a reproducible PRISMA-oriented workflow, structured bibliographic indicators, risk of bias assessment, "
+            f"and pooled effect estimation. The study also identifies knowledge gaps, methodological limitations, and future directions based on both publication patterns and empirical effect estimates."
+        )
+    return (
+        f"This review contributes to the literature on {theme} by providing a structured bibliometric and evidence-readiness map. "
+        f"The study identifies publication trends, dominant journals, keywords, metadata quality, and gaps in quantitative reporting. "
+        f"Although quantitative pooling is not yet available, this review prepares a full extraction framework for future meta-analysis and highlights the data required for stronger evidence synthesis."
+    )
+
+
+def build_cover_letter(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> str:
+    theme = normalize_theme(theme)
+    article_type = "systematic review, bibliometric analysis, and meta-analysis" if meta_result.get("k", 0) else "systematic bibliometric review with meta-analysis preparation"
+    return f"""Dear Editor,
+
+We are pleased to submit our manuscript entitled "{build_title_suggestions(theme, records, meta_result)[0]}" for consideration in your journal.
+
+This manuscript presents a {article_type} on {theme}. The study applies a structured and reproducible workflow including database searching, PRISMA-oriented screening, bibliographic mapping, risk of bias preparation, evidence-readiness assessment, and quantitative synthesis where data are available.
+
+The contribution of this manuscript lies in its integrated approach. It not only maps the development and structure of the research field, but also evaluates whether the existing evidence is sufficiently prepared for meta-analysis. The results are expected to be useful for researchers, practitioners, and future review authors interested in understanding the current state, gaps, and evidence strength of {theme}.
+
+We confirm that this manuscript is original, has not been published elsewhere, and is not under consideration by another journal. All authors have approved the submission.
+
+Thank you for considering our manuscript.
+
+Sincerely,
+[Author Name]
+"""
+
+
+def build_response_to_reviewer_template(theme: str) -> str:
+    theme = normalize_theme(theme)
+    return f"""Response to Reviewers Template
+
+Manuscript topic: {theme}
+
+Dear Editor and Reviewers,
+
+We sincerely thank the editor and reviewers for their constructive comments. We have revised the manuscript carefully according to the suggestions. Below we provide a point-by-point response.
+
+Reviewer 1
+
+Comment 1:
+[Paste reviewer comment here]
+
+Response:
+Thank you for this helpful comment. We have revised the manuscript accordingly by [describe revision]. The change can be found in Section [x], page [x], lines [x–x].
+
+Comment 2:
+[Paste reviewer comment here]
+
+Response:
+We agree with the reviewer. We have clarified [method/result/discussion] by adding [specific explanation]. This revision improves the clarity of the manuscript.
+
+Reviewer 2
+
+Comment 1:
+[Paste reviewer comment here]
+
+Response:
+Thank you for raising this point. We have addressed it by [explain action]. In addition, we have added [new table/figure/reference/sensitivity analysis] to strengthen the manuscript.
+
+Summary of major revisions:
+1. Improved the explanation of search strategy and PRISMA screening.
+2. Clarified inclusion and exclusion criteria.
+3. Expanded the discussion of research gaps and novelty.
+4. Added/updated risk of bias and sensitivity analysis.
+5. Revised the conclusion to better reflect the results.
+
+We hope the revised manuscript meets the expectations of the journal.
+
+Sincerely,
+[Author Name]
+"""
+
+
+def build_qlevel_language_polish_checklist() -> List[str]:
+    return [
+        "Gunakan kalimat akademik yang jelas, tidak terlalu panjang, dan langsung ke argumen.",
+        "Hindari klaim terlalu kuat jika data meta-analysis belum cukup.",
+        "Setiap temuan utama harus dikaitkan dengan tabel, figure, atau hasil analisis.",
+        "Gunakan istilah konsisten: systematic review, bibliometric analysis, meta-analysis, screening, included studies.",
+        "Pastikan abstract memuat angka utama: total record, included studies, pooled effect jika ada, dan I² jika ada.",
+        "Discussion tidak hanya mengulang hasil, tetapi menjelaskan makna, gap, kontribusi, dan implikasi.",
+        "Limitations harus jujur dan spesifik.",
+        "Conclusion harus singkat, tidak menambah hasil baru.",
+        "Sesuaikan style referensi dengan target journal.",
+        "Cek plagiarism/similarity dan parafrase bagian yang terlalu generik."
+    ]
+
+
+def build_qlevel_report(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> str:
+    theme = normalize_theme(theme)
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    readiness = qlevel_readiness_score(theme, records, screened, meta_studies, rob_rows)
+    checklist = build_qlevel_checklist(theme, records, screened, meta_studies, rob_rows)
+
+    lines = [
+        "Q-LEVEL JOURNAL READINESS REPORT",
+        "",
+        f"Theme: {theme}",
+        f"Readiness score: {readiness['score']}/100",
+        f"Readiness label: {readiness['label']}",
+        "",
+        "1. Component Scores"
+    ]
+    lines += [f"- {k}: {v}/100" for k, v in readiness["components"].items()]
+
+    lines += ["", "2. Missing / Weak Components"]
+    lines += [f"- {x}" for x in readiness["missing"]] or ["- No major missing component detected."]
+
+    lines += ["", "3. Q-Level Checklist"]
+    for item in checklist:
+        lines.append(f"- [{item['status']}] {item['area']}: {item['criterion']} Action: {item['action']}")
+
+    lines += [
+        "",
+        "4. Recommended Article Structure",
+        build_qlevel_article_structure(theme, meta_result),
+        "",
+        "5. Contribution Statement",
+        build_contribution_statement(theme, records, meta_result),
+        "",
+        "6. Language and Reporting Checklist"
+    ]
+    lines += [f"- {x}" for x in build_qlevel_language_polish_checklist()]
+
+    lines += [
+        "",
+        "7. Cover Letter Template",
+        build_cover_letter(theme, records, meta_result),
+        "",
+        "8. Response to Reviewer Template",
+        build_response_to_reviewer_template(theme)
+    ]
+
+    return "\n".join(lines)
+
+
+def render_qlevel_toolkit_tab():
+    st.subheader("🏆 Q-Level Journal Toolkit")
+    records = st.session_state.theme_records or st.session_state.records
+    screened = st.session_state.screened
+    meta_studies = st.session_state.meta_studies
+    rob_rows = st.session_state.rob_rows
+    theme = st.session_state.last_theme or st.text_input("Tema manual Q-Level", value="precision livestock farming", key="qlevel_theme")
+
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    readiness = qlevel_readiness_score(theme, records, screened, meta_studies, rob_rows)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Q-Level Readiness", f"{readiness['score']}/100")
+    c2.metric("Status", readiness["label"])
+    c3.metric("Studi Meta", meta_result.get("k", 0))
+
+    st.write("### Komponen Skor")
+    st.bar_chart(readiness["components"])
+
+    if readiness["missing"]:
+        st.warning("Komponen yang masih perlu diperkuat:")
+        for item in readiness["missing"]:
+            st.write(f"- {item}")
+
+    tab_check, tab_structure, tab_submission, tab_export = st.tabs([
+        "✅ Checklist", "🧱 Struktur Q-Level", "📨 Submission Kit", "📤 Export"
+    ])
+
+    with tab_check:
+        st.write("### Checklist Kesiapan Naskah Q-Level")
+        checklist = build_qlevel_checklist(theme, records, screened, meta_studies, rob_rows)
+        st.dataframe(checklist, use_container_width=True, height=420)
+
+        st.write("### Language & Reporting Polish")
+        for x in build_qlevel_language_polish_checklist():
+            st.write(f"- {x}")
+
+    with tab_structure:
+        st.write("### Struktur Artikel Q-Level")
+        st.text_area(
+            "Struktur artikel",
+            value=build_qlevel_article_structure(theme, meta_result),
+            height=520
+        )
+
+        st.write("### Contribution / Novelty Statement")
+        st.text_area(
+            "Contribution statement",
+            value=build_contribution_statement(theme, records, meta_result),
+            height=180
+        )
+
+    with tab_submission:
+        st.write("### Cover Letter")
+        st.text_area("Cover letter", value=build_cover_letter(theme, records, meta_result), height=320)
+
+        st.write("### Response to Reviewer Template")
+        st.text_area("Response template", value=build_response_to_reviewer_template(theme), height=420)
+
+    with tab_export:
+        report = build_qlevel_report(theme, records, screened, meta_studies, rob_rows)
+        st.download_button(
+            "📥 Download Q-Level Readiness Report TXT",
+            data=report.encode("utf-8"),
+            file_name="qlevel_journal_readiness_report.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+        st.download_button(
+            "📥 Download Q-Level Checklist CSV",
+            data=safe_csv(build_qlevel_checklist(theme, records, screened, meta_studies, rob_rows), ["area", "criterion", "status", "action"]),
+            file_name="qlevel_checklist.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -2571,7 +3033,8 @@ tabs = st.tabs([
     "📉 Sensitivity & Bias",
     "📌 Insight Akhir",
     "🧩 Bahan Penelitian",
-    "📝 Jurnal Review Builder",
+    "📝 Jurnal Review Builder dan Q-Level Toolkit",
+    "🏆 Q-Level Toolkit",
     "📤 Export",
     "📖 Panduan"
 ])
@@ -2930,6 +3393,9 @@ with tabs[8]:
     render_journal_review_builder_tab()
 
 with tabs[9]:
+    render_qlevel_toolkit_tab()
+
+with tabs[10]:
     st.subheader("📤 Export")
     records = st.session_state.theme_records or st.session_state.records
     screened = st.session_state.screened
@@ -2963,9 +3429,12 @@ with tabs[9]:
 
         review_draft = build_journal_review_draft(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Draft Artikel Review TXT", data=review_draft.encode("utf-8"), file_name="draft_artikel_review.txt", mime="text/plain", use_container_width=True)
+
+        qlevel_report = build_qlevel_report(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
+        st.download_button("📥 Q-Level Readiness Report TXT", data=qlevel_report.encode("utf-8"), file_name="qlevel_journal_readiness_report.txt", mime="text/plain", use_container_width=True)
         st.download_button("📥 Bahan Penelitian TXT", data=research_materials.encode("utf-8"), file_name="bahan_penelitian_biblio_meta.txt", mime="text/plain", use_container_width=True)
 
-with tabs[10]:
+with tabs[11]:
     st.subheader("📖 Panduan")
     st.markdown("""
 ### Alur yang disarankan
@@ -2979,7 +3448,7 @@ with tabs[10]:
 8. Upload kembali file tersebut ke tab **Meta-Analysis**.
 9. Isi **Risk of Bias**.
 10. Cek **Sensitivity & Bias**.
-11. Buka **Bahan Penelitian** dan **Jurnal Review Builder** untuk mengambil judul, rumusan masalah, gap, novelty, pembahasan, kesimpulan, serta draft artikel review.
+11. Buka **Bahan Penelitian** dan **Jurnal Review Builder dan Q-Level Toolkit** untuk mengambil judul, rumusan masalah, gap, novelty, pembahasan, kesimpulan, serta draft artikel review, checklist Q-level, cover letter, dan response-to-reviewer template.
 12. Export laporan dari tab **Export**.
 
 ### Sumber kredibel

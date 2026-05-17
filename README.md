@@ -94,3 +94,15 @@ Ditambahkan tab **Jurnal Review Builder** untuk mempermudah penyusunan artikel r
 - Rencana tabel dan figure
 - Template karakteristik studi
 - Checklist kesiapan naskah
+
+## Q-Level Journal Toolkit
+
+Ditambahkan tab **Q-Level Toolkit** untuk membantu naskah sesuai kaidah jurnal bereputasi:
+- Skor kesiapan Q-level
+- Checklist naskah review
+- Struktur artikel Q-level
+- Contribution/novelty statement
+- Language and reporting polish checklist
+- Cover letter template
+- Response to reviewer template
+- Q-Level readiness report
