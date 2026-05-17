@@ -169,3 +169,15 @@ Perbaikan:
 - Tidak bergantung pada indeks tab baru, sehingga tidak hilang meskipun urutan tab berubah.
 - Panduan tetap tampil walaupun dataset belum ada.
 - Checklist meta-analysis dan export panduan ditambahkan.
+
+## Research Assistant Hub
+
+Ditambahkan modul **Research Assistant Hub** di tab Panduan:
+- Status tahapan riset
+- Matriks pertanyaan penelitian
+- Matriks data yang harus dikumpulkan
+- Timeline riset
+- Bahan untuk menulis draft
+- Masukan otomatis untuk kesiapan jurnal Q-level
+- Export Research Assistant Report
+- Export Matriks Data Riset
