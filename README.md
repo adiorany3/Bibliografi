@@ -144,3 +144,11 @@ Ditambahkan modul **Review Studio** untuk mempermudah penulis:
 - Menulis draft: prompts tiap bagian naskah dan draft cepat
 - Menyesuaikan Q-level: target journal fit, strategi perbaikan, action plan
 - Export action plan dan Q-Level Review Studio Report
+
+## Fix Review Studio Kosong
+
+Perbaikan:
+- Review Studio sekarang tetap menampilkan template meskipun dataset belum ada.
+- Menambahkan input tema langsung di Review Studio.
+- Menambahkan fallback draft, action plan, writing prompts, Q-level strategy, dan checklist.
+- Render tab Review Studio dipastikan terpanggil sebelum tab Export.

@@ -3710,14 +3710,65 @@ def build_qlevel_improvement_report(theme: str, records: List[Dict[str, str]], s
 
 def render_review_studio_tab():
     st.subheader("🚀 Q-Level Review Studio")
-    records = st.session_state.theme_records or st.session_state.records
-    screened = st.session_state.screened
-    meta_studies = st.session_state.meta_studies
-    rob_rows = st.session_state.rob_rows
-    theme = st.session_state.last_theme or st.text_input("Tema Review Studio", value="precision livestock farming", key="studio_theme")
+    st.caption("Pusat kerja untuk mengumpulkan data, menganalisis, menulis draft, dan mengecek kesiapan naskah jurnal Q-level.")
 
-    readiness = qlevel_readiness_score(theme, records, screened, meta_studies, rob_rows) if "qlevel_readiness_score" in globals() else {"score": 0, "label": "Needs work", "components": {}}
+    records = st.session_state.get("theme_records", []) or st.session_state.get("records", [])
+    screened = st.session_state.get("screened", [])
+    meta_studies = st.session_state.get("meta_studies", [])
+    rob_rows = st.session_state.get("rob_rows", [])
+    default_theme = st.session_state.get("last_theme", "") or "precision livestock farming"
+
+    theme = st.text_input(
+        "Tema penelitian",
+        value=default_theme,
+        key="studio_theme_fixed",
+        help="Isi tema di sini jika belum menjalankan Workflow Tema."
+    )
+
+    # Build fallback/demo context so the tab is never empty.
+    demo_records = [
+        {
+            "title": f"Review-ready record template for {theme}",
+            "authors": "Author Example",
+            "year": "2024",
+            "journal": "Target Journal",
+            "publisher": "",
+            "doi": "",
+            "url": "",
+            "database": "Manual",
+            "impact_factor": "",
+            "indexing_status": "Needs verification",
+            "verification_reason": "Template record for planning",
+            "abstract": f"This placeholder helps plan a systematic review on {theme}.",
+            "keywords": theme,
+            "notes": "Replace with real records from Workflow Tema or Upload.",
+            "theme_relevance_score": "1.00",
+        }
+    ]
+
+    analysis_records = records if records else demo_records
+    analysis_screened = screened if screened else auto_screen(analysis_records, {
+        "min_year": 2020,
+        "max_year": 2026,
+        "only_doi": False,
+        "must_have_abstract": False,
+        "only_indexed": False,
+        "include_terms": "",
+        "exclude_terms": "",
+    })
+
+    if "qlevel_readiness_score" in globals():
+        readiness = qlevel_readiness_score(theme, records, screened, meta_studies, rob_rows)
+    else:
+        readiness = {"score": 0, "label": "Needs work", "components": {}}
+
     missing = build_missing_inputs(records, screened, meta_studies, rob_rows)
+
+    if not records:
+        st.warning(
+            "Dataset asli belum ada. Review Studio tetap menampilkan template dan rencana kerja. "
+            "Untuk hasil yang mengikuti data asli, jalankan tab Workflow Tema atau upload bibliografi terlebih dahulu."
+        )
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Readiness", f"{readiness.get('score', 0)}/100")
@@ -3734,11 +3785,25 @@ def render_review_studio_tab():
         plan = build_data_collection_plan(theme)
         st.dataframe(plan, use_container_width=True, height=420)
 
+        st.write("### Query yang Disarankan")
+        if "build_query_variants" in globals():
+            for q in build_query_variants(theme):
+                st.code(q)
+        elif "build_search_string" in globals():
+            st.code(build_search_string(theme).get("combined", theme))
+        else:
+            st.code(theme)
+
         st.write("### Data yang Masih Kurang")
         if missing:
             st.dataframe(missing, use_container_width=True, height=360)
         else:
-            st.success("Tidak ada kekurangan besar pada input data.")
+            st.success("Tidak ada kekurangan besar pada input data. Lanjutkan validasi manual dan polishing naskah.")
+
+        st.info(
+            "Untuk Q-level, usahakan data berasal dari sumber publik + database manual seperti Scopus, Web of Science, "
+            "CAB Abstracts/CABI, AGRIS/FAO, PubAg/USDA, IEEE Xplore, ScienceDirect, dan SpringerLink jika tersedia."
+        )
 
     with tab_analyze:
         st.write("### Decision Tree Analisis")
@@ -3747,10 +3812,28 @@ def render_review_studio_tab():
         st.write("### Komponen Kesiapan")
         if readiness.get("components"):
             st.bar_chart(readiness["components"])
+        else:
+            st.info("Komponen kesiapan akan muncul setelah dataset tersedia.")
 
         st.write("### Masukan Analisis")
-        for item in missing:
-            st.write(f"- **{item['area']}**: {item['recommended_action']}")
+        if missing:
+            for item in missing:
+                st.write(f"- **{item['area']}**: {item['recommended_action']}")
+        else:
+            st.write("- Dataset sudah cukup baik untuk dilanjutkan ke drafting dan validasi manual.")
+
+        if meta_studies:
+            meta_result = run_meta(meta_studies)
+            st.write("### Ringkasan Meta-Analysis")
+            if meta_result.get("k", 0):
+                main = meta_result["random"]
+                h = meta_result["heterogeneity"]
+                a, b, c = st.columns(3)
+                a.metric("Pooled effect", f"{main['pooled']:.4f}")
+                b.metric("95% CI", f"{main['ci'][0]:.3f} – {main['ci'][1]:.3f}")
+                c.metric("I²", f"{h['I2']:.1f}%")
+        else:
+            st.info("Belum ada studi effect size valid. Isi Excel meta-analysis dari full-text jika ingin pooled effect.")
 
     with tab_write:
         st.write("### Writing Prompts per Bagian Naskah")
@@ -3763,14 +3846,42 @@ def render_review_studio_tab():
             draft_options.append("Journal Review Draft")
         if "build_systematic_review_draft" in globals():
             draft_options.append("Systematic Review Draft")
-        chosen = st.selectbox("Pilih draft", draft_options or ["Tidak tersedia"])
+        if "build_research_materials_report" in globals():
+            draft_options.append("Bahan Penelitian Lengkap")
+
+        chosen = st.selectbox("Pilih draft", draft_options or ["Template umum"])
 
         if chosen == "Journal Review Draft" and "build_journal_review_draft" in globals():
-            st.text_area("Draft artikel review", value=build_journal_review_draft(theme, records, screened, meta_studies, rob_rows), height=520)
+            draft_text = build_journal_review_draft(theme, analysis_records, analysis_screened, meta_studies, rob_rows)
         elif chosen == "Systematic Review Draft" and "build_systematic_review_draft" in globals():
-            st.text_area("Draft systematic review", value=build_systematic_review_draft(theme, records, screened, meta_studies, rob_rows), height=520)
+            draft_text = build_systematic_review_draft(theme, analysis_records, analysis_screened, meta_studies, rob_rows)
+        elif chosen == "Bahan Penelitian Lengkap" and "build_research_materials_report" in globals():
+            draft_text = build_research_materials_report(theme, analysis_records, analysis_screened, meta_studies, rob_rows)
         else:
-            st.info("Draft generator belum tersedia pada paket ini.")
+            draft_text = f"""DRAFT REVIEW TEMPLATE
+
+Title:
+Systematic Review of {theme.title()}: Evidence Mapping and Q-Level Review Preparation
+
+Abstract:
+This review aims to map and synthesize literature on {theme}. The study follows a PRISMA-oriented systematic review workflow, combining bibliographic mapping, eligibility screening, risk of bias preparation, and meta-analysis readiness assessment.
+
+Introduction:
+Research on {theme} requires structured synthesis because the literature is distributed across databases, journals, and methodological traditions.
+
+Methods:
+The review should report data sources, search strings, inclusion-exclusion criteria, study selection, data extraction, risk of bias, and synthesis strategy.
+
+Results:
+Report PRISMA counts, publication trends, dominant sources, keywords, included studies, and meta-analysis results if available.
+
+Discussion:
+Discuss main findings, gap, novelty, implications, heterogeneity, limitations, and future research.
+
+Conclusion:
+Summarize the contribution and evidence readiness of the field.
+"""
+        st.text_area("Draft", value=draft_text, height=560)
 
     with tab_qlevel:
         st.write("### Target Journal Fit")
@@ -3779,17 +3890,21 @@ def render_review_studio_tab():
         st.write("### Strategi Agar Sesuai Jurnal Q-Level")
         strategies = [
             "Gunakan PRISMA sebagai backbone metode dan tampilkan flow diagram/counts.",
-            "Cantumkan full search string dan database secara transparan.",
+            "Cantumkan full search string, database, tanggal pencarian, dan kriteria eligibility.",
             "Pastikan data Scopus/WoS atau database domain utama ikut diimpor jika tersedia.",
             "Tambahkan tabel karakteristik studi dan risk of bias.",
             "Jangan memaksakan meta-analysis jika effect size belum cukup; gunakan narrative synthesis dan meta-analysis readiness.",
             "Perkuat novelty statement: bukan hanya mapping, tetapi evidence-readiness dan synthesis pipeline.",
             "Gunakan figure berkualitas: PRISMA flow, publication trend, keyword map, forest plot jika ada.",
             "Bahas heterogenitas, keterbatasan, dan implikasi secara kritis.",
-            "Validasi ulang hasil dengan software statistik khusus sebelum submit.",
+            "Validasi ulang hasil meta-analysis dengan software statistik khusus sebelum submit.",
         ]
         for s in strategies:
             st.write(f"- {s}")
+
+        if "build_qlevel_checklist" in globals():
+            st.write("### Checklist Q-Level")
+            st.dataframe(build_qlevel_checklist(theme, records, screened, meta_studies, rob_rows), use_container_width=True, height=360)
 
     with tab_export:
         report = build_qlevel_improvement_report(theme, records, screened, meta_studies, rob_rows)
@@ -4227,6 +4342,9 @@ with tabs[9]:
     render_qlevel_toolkit_tab()
 
 with tabs[10]:
+    render_review_studio_tab()
+
+with tabs[11]:
     st.subheader("📤 Export")
     records = st.session_state.theme_records or st.session_state.records
     screened = st.session_state.screened
@@ -4279,7 +4397,7 @@ with tabs[10]:
             st.download_button("📥 Daftar Sumber Relevan CSV", data=safe_csv(source_catalog, ["source", "type", "best_for", "use_in_app", "note"]), file_name="daftar_sumber_relevan.csv", mime="text/csv", use_container_width=True)
         st.download_button("📥 Bahan Penelitian TXT", data=research_materials.encode("utf-8"), file_name="bahan_penelitian_biblio_meta.txt", mime="text/plain", use_container_width=True)
 
-with tabs[11]:
+with tabs[12]:
     st.subheader("📖 Panduan")
     st.markdown("""
 ### Alur yang disarankan
