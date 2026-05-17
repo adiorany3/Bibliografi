@@ -181,3 +181,12 @@ Ditambahkan modul **Research Assistant Hub** di tab Panduan:
 - Masukan otomatis untuk kesiapan jurnal Q-level
 - Export Research Assistant Report
 - Export Matriks Data Riset
+
+## Tambahan Sumber dan Deduplikasi Otomatis
+
+Perbaikan:
+- Menambahkan sumber API aktif: OpenAIRE.
+- Menambahkan sumber manual/import: Cochrane Library, Google Scholar, Dimensions, ProQuest Dissertations, Research Rabbit/Connected Papers.
+- Deduplikasi otomatis diperkuat menggunakan DOI, normalisasi judul, tahun, dan author pertama.
+- Metadata dari duplikat digabung, termasuk database, abstract, keyword, notes, dan indexing status.
+- Panel deduplikasi ditambahkan di tab Bibliografi.
