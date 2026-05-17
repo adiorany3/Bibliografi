@@ -1048,6 +1048,636 @@ Validasi akhir tetap perlu dilakukan manual melalui Scopus, Web of Science, JCR,
 """
 
 
+
+# =========================
+# Meta-Analytic Analysis Utilities
+# =========================
+META_COLUMNS = [
+    "study_id", "year", "group", "effect_size", "standard_error", "variance",
+    "weight_fixed", "weight_random", "lower_ci", "upper_ci", "notes"
+]
+
+
+def _safe_float(value, default=None):
+    try:
+        if value is None or str(value).strip() == "":
+            return default
+        return float(str(value).replace(",", "."))
+    except Exception:
+        return default
+
+
+def _normal_cdf(x: float) -> float:
+    # Standard normal CDF using math.erf to avoid scipy dependency.
+    import math
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def compute_smd(n_t, mean_t, sd_t, n_c, mean_c, sd_c):
+    """Hedges g and SE from two independent groups."""
+    import math
+    n_t = _safe_float(n_t)
+    mean_t = _safe_float(mean_t)
+    sd_t = _safe_float(sd_t)
+    n_c = _safe_float(n_c)
+    mean_c = _safe_float(mean_c)
+    sd_c = _safe_float(sd_c)
+    if not all(v is not None for v in [n_t, mean_t, sd_t, n_c, mean_c, sd_c]) or n_t <= 1 or n_c <= 1 or sd_t <= 0 or sd_c <= 0:
+        return None, None
+    pooled = math.sqrt(((n_t - 1) * sd_t ** 2 + (n_c - 1) * sd_c ** 2) / (n_t + n_c - 2))
+    if pooled <= 0:
+        return None, None
+    d = (mean_t - mean_c) / pooled
+    correction = 1 - (3 / (4 * (n_t + n_c) - 9))
+    g = correction * d
+    var_g = ((n_t + n_c) / (n_t * n_c)) + (g ** 2 / (2 * (n_t + n_c - 2)))
+    return g, math.sqrt(var_g)
+
+
+def compute_log_or(a, b, c, d):
+    """Log odds ratio and SE from 2x2 table: event_t, non_event_t, event_c, non_event_c."""
+    import math
+    a = _safe_float(a)
+    b = _safe_float(b)
+    c = _safe_float(c)
+    d = _safe_float(d)
+    if not all(v is not None for v in [a, b, c, d]):
+        return None, None
+    # Haldane-Anscombe correction for zeros.
+    if min(a, b, c, d) == 0:
+        a += 0.5
+        b += 0.5
+        c += 0.5
+        d += 0.5
+    if min(a, b, c, d) <= 0:
+        return None, None
+    lor = math.log((a * d) / (b * c))
+    se = math.sqrt(1/a + 1/b + 1/c + 1/d)
+    return lor, se
+
+
+def compute_log_rr(event_t, total_t, event_c, total_c):
+    """Log risk ratio and SE."""
+    import math
+    event_t = _safe_float(event_t)
+    total_t = _safe_float(total_t)
+    event_c = _safe_float(event_c)
+    total_c = _safe_float(total_c)
+    if not all(v is not None for v in [event_t, total_t, event_c, total_c]):
+        return None, None
+    non_event_t = total_t - event_t
+    non_event_c = total_c - event_c
+    if min(event_t, non_event_t, event_c, non_event_c) == 0:
+        event_t += 0.5
+        non_event_t += 0.5
+        event_c += 0.5
+        non_event_c += 0.5
+        total_t = event_t + non_event_t
+        total_c = event_c + non_event_c
+    if min(event_t, event_c, total_t, total_c) <= 0:
+        return None, None
+    lrr = math.log((event_t / total_t) / (event_c / total_c))
+    se = math.sqrt((1/event_t) - (1/total_t) + (1/event_c) - (1/total_c))
+    return lrr, se
+
+
+def compute_fisher_z(r, n):
+    """Fisher z transformation for correlation meta-analysis."""
+    import math
+    r = _safe_float(r)
+    n = _safe_float(n)
+    if r is None or n is None or n <= 3 or r <= -1 or r >= 1:
+        return None, None
+    z = 0.5 * math.log((1 + r) / (1 - r))
+    se = math.sqrt(1 / (n - 3))
+    return z, se
+
+
+def parse_meta_csv_bytes(data: bytes):
+    """Parse meta-analysis CSV. Supports generic yi/sei and raw study columns."""
+    text = data.decode("utf-8-sig", errors="replace")
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    rows = list(reader)
+    return standardize_meta_rows(rows)
+
+
+def standardize_meta_rows(rows):
+    studies = []
+    for i, row in enumerate(rows, 1):
+        lower = {str(k).strip().lower(): v for k, v in row.items()}
+        study_id = clean(
+            lower.get("study_id") or lower.get("study") or lower.get("author") or lower.get("title") or f"Study {i}"
+        )
+        year = year_from_text(
+            lower.get("year") or lower.get("publication_year") or lower.get("date") or ""
+        )
+        group = clean(lower.get("group") or lower.get("subgroup") or lower.get("moderator") or "Overall")
+        notes = clean(lower.get("notes") or lower.get("note") or "")
+
+        yi = _safe_float(lower.get("effect_size") or lower.get("yi") or lower.get("effect") or lower.get("g") or lower.get("d") or lower.get("logor") or lower.get("logrr") or lower.get("z"))
+        sei = _safe_float(lower.get("standard_error") or lower.get("se") or lower.get("sei"))
+        vi = _safe_float(lower.get("variance") or lower.get("var") or lower.get("vi"))
+
+        if yi is None or (sei is None and vi is None):
+            effect_type = clean(lower.get("effect_type") or lower.get("type") or "").lower()
+
+            if effect_type in ["smd", "hedges", "hedges_g", "cohen_d", "d", "g"] or any(k in lower for k in ["mean_t", "mean_control"]):
+                yi, sei = compute_smd(
+                    lower.get("n_t") or lower.get("n_treatment") or lower.get("nt"),
+                    lower.get("mean_t") or lower.get("mean_treatment") or lower.get("mt"),
+                    lower.get("sd_t") or lower.get("sd_treatment") or lower.get("sdt"),
+                    lower.get("n_c") or lower.get("n_control") or lower.get("nc"),
+                    lower.get("mean_c") or lower.get("mean_control") or lower.get("mc"),
+                    lower.get("sd_c") or lower.get("sd_control") or lower.get("sdc"),
+                )
+
+            elif effect_type in ["or", "log_or", "odds_ratio", "logor"] or any(k in lower for k in ["event_t", "non_event_t"]):
+                yi, sei = compute_log_or(
+                    lower.get("event_t") or lower.get("a"),
+                    lower.get("non_event_t") or lower.get("b"),
+                    lower.get("event_c") or lower.get("c"),
+                    lower.get("non_event_c") or lower.get("d"),
+                )
+
+            elif effect_type in ["rr", "risk_ratio", "log_rr", "logrr"] or any(k in lower for k in ["total_t", "total_c"]):
+                yi, sei = compute_log_rr(
+                    lower.get("event_t") or lower.get("events_treatment"),
+                    lower.get("total_t") or lower.get("n_t") or lower.get("n_treatment"),
+                    lower.get("event_c") or lower.get("events_control"),
+                    lower.get("total_c") or lower.get("n_c") or lower.get("n_control"),
+                )
+
+            elif effect_type in ["correlation", "r", "fisher_z"] or "r" in lower:
+                yi, sei = compute_fisher_z(lower.get("r"), lower.get("n"))
+
+        if yi is None:
+            continue
+        if sei is None and vi is not None and vi > 0:
+            import math
+            sei = math.sqrt(vi)
+        if sei is None or sei <= 0:
+            continue
+
+        vi = sei ** 2
+        studies.append({
+            "study_id": study_id,
+            "year": year,
+            "group": group or "Overall",
+            "effect_size": yi,
+            "standard_error": sei,
+            "variance": vi,
+            "notes": notes,
+        })
+    return studies
+
+
+def meta_analysis(studies):
+    import math
+    clean_studies = []
+    for s in studies:
+        yi = _safe_float(s.get("effect_size"))
+        sei = _safe_float(s.get("standard_error"))
+        vi = _safe_float(s.get("variance"))
+        if yi is None:
+            continue
+        if sei is None and vi is not None and vi > 0:
+            sei = math.sqrt(vi)
+        if sei is None or sei <= 0:
+            continue
+        vi = sei ** 2
+        clean_studies.append({**s, "effect_size": yi, "standard_error": sei, "variance": vi})
+
+    k = len(clean_studies)
+    if k == 0:
+        return {"k": 0, "studies": []}
+
+    weights_fe = [1 / s["variance"] for s in clean_studies]
+    sum_w = sum(weights_fe)
+    pooled_fe = sum(w * s["effect_size"] for w, s in zip(weights_fe, clean_studies)) / sum_w
+    se_fe = math.sqrt(1 / sum_w)
+    ci_fe = (pooled_fe - 1.96 * se_fe, pooled_fe + 1.96 * se_fe)
+    z_fe = pooled_fe / se_fe if se_fe else 0
+    p_fe = 2 * (1 - _normal_cdf(abs(z_fe)))
+
+    q = sum(w * (s["effect_size"] - pooled_fe) ** 2 for w, s in zip(weights_fe, clean_studies))
+    df = k - 1
+    c = sum_w - (sum(w ** 2 for w in weights_fe) / sum_w) if sum_w else 0
+    tau2 = max(0, (q - df) / c) if c > 0 and k > 1 else 0
+    i2 = max(0, ((q - df) / q) * 100) if q > 0 and k > 1 else 0
+
+    weights_re = [1 / (s["variance"] + tau2) for s in clean_studies]
+    sum_wr = sum(weights_re)
+    pooled_re = sum(w * s["effect_size"] for w, s in zip(weights_re, clean_studies)) / sum_wr
+    se_re = math.sqrt(1 / sum_wr)
+    ci_re = (pooled_re - 1.96 * se_re, pooled_re + 1.96 * se_re)
+    z_re = pooled_re / se_re if se_re else 0
+    p_re = 2 * (1 - _normal_cdf(abs(z_re)))
+
+    enriched = []
+    for s, wf, wr in zip(clean_studies, weights_fe, weights_re):
+        yi = s["effect_size"]
+        se = s["standard_error"]
+        enriched.append({
+            **s,
+            "weight_fixed": wf / sum_w * 100 if sum_w else 0,
+            "weight_random": wr / sum_wr * 100 if sum_wr else 0,
+            "lower_ci": yi - 1.96 * se,
+            "upper_ci": yi + 1.96 * se,
+        })
+
+    return {
+        "k": k,
+        "studies": enriched,
+        "fixed": {"pooled": pooled_fe, "se": se_fe, "ci": ci_fe, "z": z_fe, "p": p_fe},
+        "random": {"pooled": pooled_re, "se": se_re, "ci": ci_re, "z": z_re, "p": p_re},
+        "heterogeneity": {"Q": q, "df": df, "tau2": tau2, "I2": i2},
+    }
+
+
+def subgroup_meta_analysis(studies):
+    groups = {}
+    for s in studies:
+        g = clean(s.get("group", "Overall")) or "Overall"
+        groups.setdefault(g, []).append(s)
+    return {g: meta_analysis(items) for g, items in groups.items()}
+
+
+def meta_to_csv(studies):
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=META_COLUMNS)
+    writer.writeheader()
+    for s in studies:
+        writer.writerow({col: s.get(col, "") for col in META_COLUMNS})
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def build_meta_report(result, subgroup_results=None, model_name="Random-effects"):
+    if not result or result.get("k", 0) == 0:
+        return "Belum ada data meta-analysis yang valid."
+
+    m = result["random"] if model_name.startswith("Random") else result["fixed"]
+    h = result["heterogeneity"]
+    lines = [
+        "LAPORAN META-ANALYSIS",
+        "",
+        "Ringkasan:",
+        f"- Jumlah studi: {result['k']}",
+        f"- Model utama: {model_name}",
+        f"- Pooled effect: {m['pooled']:.4f}",
+        f"- 95% CI: {m['ci'][0]:.4f} sampai {m['ci'][1]:.4f}",
+        f"- z-value: {m['z']:.4f}",
+        f"- p-value: {m['p']:.6f}",
+        "",
+        "Heterogeneity:",
+        f"- Q: {h['Q']:.4f}",
+        f"- df: {h['df']}",
+        f"- tau²: {h['tau2']:.4f}",
+        f"- I²: {h['I2']:.2f}%",
+        "",
+        "Interpretasi singkat:",
+    ]
+    if h["I2"] < 30:
+        lines.append("- Heterogenitas rendah.")
+    elif h["I2"] < 60:
+        lines.append("- Heterogenitas sedang.")
+    else:
+        lines.append("- Heterogenitas tinggi; pertimbangkan subgroup analysis, moderator, atau sensitivity analysis.")
+
+    if subgroup_results:
+        lines += ["", "Subgroup analysis:"]
+        for g, res in subgroup_results.items():
+            if res.get("k", 0):
+                rm = res["random"]
+                lines.append(f"- {g}: k={res['k']}, pooled={rm['pooled']:.4f}, 95% CI={rm['ci'][0]:.4f} sampai {rm['ci'][1]:.4f}, I²={res['heterogeneity']['I2']:.2f}%")
+
+    lines += [
+        "",
+        "Catatan metodologis:",
+        "- Meta-analysis merangkum bukti empiris melalui ukuran efek dan hubungan antarvariabel.",
+        "- Pastikan studi cukup homogen secara desain, populasi, intervensi/eksposur, dan outcome.",
+        "- Periksa risiko bias, kriteria inklusi-eksklusi, dan konsistensi definisi outcome sebelum menarik kesimpulan.",
+    ]
+    return "\n".join(lines)
+
+
+def sample_meta_csv():
+    return """study_id,year,group,effect_size,standard_error,notes
+Smith 2020,2020,Education,0.35,0.12,Generic effect size
+Lee 2021,2021,Education,0.52,0.15,Generic effect size
+Garcia 2022,2022,Health,0.28,0.10,Generic effect size
+Chen 2023,2023,Health,0.61,0.20,Generic effect size
+Rahman 2024,2024,Technology,0.44,0.13,Generic effect size
+"""
+
+
+def sample_meta_raw_csv():
+    return """study_id,year,group,effect_type,n_t,mean_t,sd_t,n_c,mean_c,sd_c,notes
+Study A,2020,Education,smd,45,82.4,10.5,43,77.1,11.2,Raw SMD data
+Study B,2021,Education,smd,60,75.0,9.8,58,71.3,10.1,Raw SMD data
+Study C,2022,Education,smd,38,68.2,8.9,40,65.4,9.2,Raw SMD data
+"""
+
+
+def render_meta_analysis_tab():
+    st.subheader("🧪 Meta-Analytic Analysis")
+    st.caption("Analisis ini melengkapi bibliometric analysis dengan ringkasan bukti empiris berbasis effect size.")
+
+    if "meta_studies" not in st.session_state:
+        st.session_state.meta_studies = []
+
+    st.info(
+        "Gunakan tab ini jika data studi memiliki effect size, standard error, atau data mentah "
+        "seperti mean/SD dua kelompok, odds ratio, risk ratio, atau korelasi."
+    )
+
+    meta_input_tab, meta_result_tab, meta_guide_tab = st.tabs([
+        "📥 Input Data", "📊 Hasil Meta-Analysis", "📘 Panduan"
+    ])
+
+    with meta_input_tab:
+        st.write("### Upload Data Meta-Analysis")
+        uploaded_meta = st.file_uploader(
+            "Upload CSV meta-analysis",
+            type=["csv"],
+            key="meta_upload",
+            help="Kolom minimal: study_id,effect_size,standard_error. Bisa juga memakai data mentah SMD/OR/RR/korelasi."
+        )
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.download_button(
+                "📄 Template effect size",
+                data=sample_meta_csv().encode("utf-8"),
+                file_name="template_meta_effect_size.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with c2:
+            st.download_button(
+                "📄 Template raw SMD",
+                data=sample_meta_raw_csv().encode("utf-8"),
+                file_name="template_meta_raw_smd.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with c3:
+            if st.button("🧪 Muat sample meta", use_container_width=True):
+                st.session_state.meta_studies = parse_meta_csv_bytes(sample_meta_csv().encode("utf-8"))
+                st.success("Sample meta-analysis dimuat.")
+
+        if uploaded_meta and st.button("Proses CSV Meta-Analysis", type="primary", use_container_width=True):
+            try:
+                parsed = parse_meta_csv_bytes(uploaded_meta.getvalue())
+                st.session_state.meta_studies = parsed
+                st.success(f"Berhasil membaca {len(parsed)} studi valid.")
+            except Exception as exc:
+                st.error(f"Gagal membaca CSV meta-analysis: {exc}")
+
+        st.divider()
+        st.write("### Tambah Studi Manual")
+        with st.form("manual_meta_form"):
+            mode = st.selectbox(
+                "Jenis input",
+                ["Effect size + SE", "SMD dari mean/SD dua kelompok", "Log Odds Ratio dari 2x2", "Log Risk Ratio", "Korelasi Fisher z"]
+            )
+            study_id = st.text_input("Study ID", placeholder="Contoh: Smith 2022")
+            year = st.text_input("Tahun")
+            group = st.text_input("Subgroup/moderator", value="Overall")
+
+            yi = sei = None
+            notes = ""
+
+            if mode == "Effect size + SE":
+                effect_size = st.number_input("Effect size / yi", value=0.0, step=0.01, format="%.4f")
+                standard_error = st.number_input("Standard error / SE", min_value=0.0001, value=0.10, step=0.01, format="%.4f")
+                yi = effect_size
+                sei = standard_error
+                notes = "Generic effect size"
+
+            elif mode == "SMD dari mean/SD dua kelompok":
+                a, b, c = st.columns(3)
+                with a:
+                    n_t = st.number_input("n treatment", min_value=2, value=50)
+                    mean_t = st.number_input("mean treatment", value=75.0)
+                    sd_t = st.number_input("SD treatment", min_value=0.0001, value=10.0)
+                with b:
+                    n_c = st.number_input("n control", min_value=2, value=50)
+                    mean_c = st.number_input("mean control", value=70.0)
+                    sd_c = st.number_input("SD control", min_value=0.0001, value=10.0)
+                yi, sei = compute_smd(n_t, mean_t, sd_t, n_c, mean_c, sd_c)
+                notes = "Hedges g from two independent groups"
+                with c:
+                    st.metric("Hedges g", f"{yi:.4f}" if yi is not None else "Invalid")
+                    st.metric("SE", f"{sei:.4f}" if sei is not None else "Invalid")
+
+            elif mode == "Log Odds Ratio dari 2x2":
+                a1, a2, a3, a4 = st.columns(4)
+                with a1:
+                    event_t = st.number_input("event treatment", min_value=0, value=20)
+                with a2:
+                    non_event_t = st.number_input("non-event treatment", min_value=0, value=30)
+                with a3:
+                    event_c = st.number_input("event control", min_value=0, value=12)
+                with a4:
+                    non_event_c = st.number_input("non-event control", min_value=0, value=38)
+                yi, sei = compute_log_or(event_t, non_event_t, event_c, non_event_c)
+                notes = "Log odds ratio from 2x2 table"
+                st.metric("log(OR)", f"{yi:.4f}" if yi is not None else "Invalid")
+                st.metric("SE", f"{sei:.4f}" if sei is not None else "Invalid")
+
+            elif mode == "Log Risk Ratio":
+                a1, a2, a3, a4 = st.columns(4)
+                with a1:
+                    event_t = st.number_input("events treatment", min_value=0, value=20)
+                with a2:
+                    total_t = st.number_input("total treatment", min_value=1, value=50)
+                with a3:
+                    event_c = st.number_input("events control", min_value=0, value=12)
+                with a4:
+                    total_c = st.number_input("total control", min_value=1, value=50)
+                yi, sei = compute_log_rr(event_t, total_t, event_c, total_c)
+                notes = "Log risk ratio"
+                st.metric("log(RR)", f"{yi:.4f}" if yi is not None else "Invalid")
+                st.metric("SE", f"{sei:.4f}" if sei is not None else "Invalid")
+
+            else:
+                a1, a2 = st.columns(2)
+                with a1:
+                    r_value = st.number_input("Correlation r", min_value=-0.999, max_value=0.999, value=0.30, step=0.01)
+                with a2:
+                    n_value = st.number_input("Sample size n", min_value=4, value=100)
+                yi, sei = compute_fisher_z(r_value, n_value)
+                notes = "Fisher z from correlation"
+                st.metric("Fisher z", f"{yi:.4f}" if yi is not None else "Invalid")
+                st.metric("SE", f"{sei:.4f}" if sei is not None else "Invalid")
+
+            submitted = st.form_submit_button("Tambahkan studi", type="primary")
+
+        if submitted:
+            if yi is None or sei is None or sei <= 0:
+                st.error("Data studi tidak valid.")
+            else:
+                st.session_state.meta_studies.append({
+                    "study_id": study_id or f"Study {len(st.session_state.meta_studies)+1}",
+                    "year": year,
+                    "group": group or "Overall",
+                    "effect_size": yi,
+                    "standard_error": sei,
+                    "variance": sei ** 2,
+                    "notes": notes,
+                })
+                st.success("Studi ditambahkan.")
+
+        if st.session_state.meta_studies:
+            st.divider()
+            if st.button("🗑️ Kosongkan data meta-analysis"):
+                st.session_state.meta_studies = []
+                st.success("Data meta-analysis dikosongkan.")
+
+    with meta_result_tab:
+        studies = st.session_state.meta_studies
+        if not studies:
+            st.info("Belum ada data meta-analysis. Upload CSV, tambah manual, atau muat sample.")
+        else:
+            result = meta_analysis(studies)
+            subgroup_results = subgroup_meta_analysis(studies)
+
+            model_choice = st.radio("Model utama", ["Random-effects (DerSimonian-Laird)", "Fixed-effect"], horizontal=True)
+            main = result["random"] if model_choice.startswith("Random") else result["fixed"]
+            h = result["heterogeneity"]
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Jumlah studi", result["k"])
+            m2.metric("Pooled effect", f"{main['pooled']:.4f}")
+            m3.metric("95% CI", f"{main['ci'][0]:.3f} – {main['ci'][1]:.3f}")
+            m4.metric("p-value", f"{main['p']:.4f}")
+
+            h1, h2, h3, h4 = st.columns(4)
+            h1.metric("Q", f"{h['Q']:.3f}")
+            h2.metric("df", h["df"])
+            h3.metric("tau²", f"{h['tau2']:.4f}")
+            h4.metric("I²", f"{h['I2']:.1f}%")
+
+            if h["I2"] >= 60:
+                st.warning("Heterogenitas tinggi. Pertimbangkan subgroup analysis, moderator, atau sensitivity analysis.")
+            elif h["I2"] >= 30:
+                st.info("Heterogenitas sedang. Interpretasi pooled effect perlu hati-hati.")
+            else:
+                st.success("Heterogenitas rendah.")
+
+            st.divider()
+            st.write("### Tabel Studi dan Bobot")
+            display = []
+            for s in result["studies"]:
+                display.append({
+                    "Study": s.get("study_id", ""),
+                    "Year": s.get("year", ""),
+                    "Group": s.get("group", ""),
+                    "Effect": round(s.get("effect_size", 0), 4),
+                    "SE": round(s.get("standard_error", 0), 4),
+                    "95% CI": f"{s.get('lower_ci', 0):.3f} – {s.get('upper_ci', 0):.3f}",
+                    "Weight FE %": round(s.get("weight_fixed", 0), 2),
+                    "Weight RE %": round(s.get("weight_random", 0), 2),
+                })
+            st.dataframe(display, use_container_width=True, height=360)
+
+            st.write("### Forest Plot Sederhana")
+            st.caption("Visualisasi ringan tanpa matplotlib/plotly. Garis menunjukkan 95% CI; titik menunjukkan effect size.")
+            for s in result["studies"]:
+                yi = s["effect_size"]
+                lo = s["lower_ci"]
+                hi = s["upper_ci"]
+                label = f"{s.get('study_id','Study')} ({s.get('year','')})"
+                st.write(f"**{label}**: {yi:.3f} [{lo:.3f}, {hi:.3f}]")
+                st.progress(min(1.0, max(0.0, (yi + 2) / 4)))
+
+            st.write(f"**Pooled ({model_choice})**: {main['pooled']:.3f} [{main['ci'][0]:.3f}, {main['ci'][1]:.3f}]")
+
+            st.divider()
+            st.write("### Subgroup Analysis")
+            subgroup_display = []
+            for g, res in subgroup_results.items():
+                if res.get("k", 0):
+                    rm = res["random"]
+                    subgroup_display.append({
+                        "Group": g,
+                        "k": res["k"],
+                        "Pooled RE": round(rm["pooled"], 4),
+                        "95% CI": f"{rm['ci'][0]:.3f} – {rm['ci'][1]:.3f}",
+                        "I²": f"{res['heterogeneity']['I2']:.1f}%",
+                    })
+            st.dataframe(subgroup_display, use_container_width=True)
+
+            st.divider()
+            report = build_meta_report(result, subgroup_results, model_choice)
+            d1, d2 = st.columns(2)
+            with d1:
+                st.download_button(
+                    "📥 Download Data Meta CSV",
+                    data=meta_to_csv(result["studies"]),
+                    file_name="meta_analysis_data.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+            with d2:
+                st.download_button(
+                    "📥 Download Laporan Meta TXT",
+                    data=report.encode("utf-8"),
+                    file_name="laporan_meta_analysis.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+
+    with meta_guide_tab:
+        st.markdown("""
+### Format CSV yang didukung
+
+**1. Generic effect size**
+```csv
+study_id,year,group,effect_size,standard_error
+Smith 2020,2020,Education,0.35,0.12
+```
+
+**2. SMD / Hedges g dari dua kelompok**
+```csv
+study_id,year,group,effect_type,n_t,mean_t,sd_t,n_c,mean_c,sd_c
+Study A,2020,Education,smd,45,82.4,10.5,43,77.1,11.2
+```
+
+**3. Odds Ratio dari tabel 2x2**
+```csv
+study_id,effect_type,event_t,non_event_t,event_c,non_event_c
+Study A,or,20,30,12,38
+```
+
+**4. Risk Ratio**
+```csv
+study_id,effect_type,event_t,total_t,event_c,total_c
+Study A,rr,20,50,12,50
+```
+
+**5. Korelasi**
+```csv
+study_id,effect_type,r,n
+Study A,correlation,0.32,120
+```
+
+### Output
+- Fixed-effect pooled estimate
+- Random-effects pooled estimate
+- Q statistic
+- tau²
+- I²
+- subgroup analysis
+- forest plot sederhana
+- ekspor data dan laporan
+""")
+
+
 # =========================
 # Streamlit UI
 # =========================
@@ -1541,6 +2171,9 @@ with method_tab:
 - Interpretasi cluster tetap perlu dibaca secara substantif, tidak cukup hanya melihat angka.
 - Untuk visualisasi lanjutan, ekspor ke VOSviewer, Gephi, Bibliometrix, atau CiteSpace.
 """)
+
+with meta_tab:
+    render_meta_analysis_tab()
 
 with export_tab:
     st.subheader("📤 Ekspor Data")

@@ -1,0 +1,6 @@
+study_id,year,group,effect_size,standard_error,notes
+Smith 2020,2020,Education,0.35,0.12,Generic effect size
+Lee 2021,2021,Education,0.52,0.15,Generic effect size
+Garcia 2022,2022,Health,0.28,0.10,Generic effect size
+Chen 2023,2023,Health,0.61,0.20,Generic effect size
+Rahman 2024,2024,Technology,0.44,0.13,Generic effect size

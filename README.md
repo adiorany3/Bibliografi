@@ -53,3 +53,23 @@ streamlit run app.py
 ## Catatan
 
 Status Scopus/WoS/high impact di aplikasi ini adalah kandidat berbasis metadata. Validasi resmi tetap perlu dilakukan melalui Scopus, Web of Science, JCR, SJR, atau laman resmi jurnal.
+
+
+## Tambahan: Meta-Analytic Analysis
+
+Aplikasi ini sekarang memiliki tab **Meta-Analytic** untuk menganalisis studi empiris berbasis effect size.
+
+Fitur:
+- Input generic effect size + standard error
+- Hitung Hedges g/SMD dari mean, SD, dan n dua kelompok
+- Hitung log odds ratio dari tabel 2x2
+- Hitung log risk ratio
+- Hitung Fisher z dari korelasi
+- Fixed-effect model
+- Random-effects model DerSimonian-Laird
+- Heterogeneity: Q, tau², I²
+- Subgroup analysis
+- Forest plot sederhana
+- Ekspor CSV dan laporan TXT
+
+Catatan: fitur ini memakai Python standard library agar tetap ringan di Streamlit Cloud. Untuk publikasi akademik, validasi kembali hasil dengan software statistik khusus seperti R metafor/meta, RevMan, JASP, Jamovi, atau Stata.
