@@ -1,46 +1,30 @@
-# Sistem Bibliografi Riset Streamlit Cloud
+# Sistem Bibliografi Riset
 
-Aplikasi ini dibuat untuk mengelola bibliografi riset dari:
-- Crossref
-- OpenAlex
-- file ekspor Scopus/WoS berbentuk CSV
-- file BibTeX/RIS dari Zotero, Mendeley, Publish or Perish, dan reference manager lain
+Aplikasi Streamlit untuk mengelola bibliografi riset dari Crossref, OpenAlex, file CSV Scopus/WoS, BibTeX, dan RIS.
 
 ## Fitur
-
-- Pencarian metadata bibliografi berdasarkan keyword/topik riset
-- Upload CSV, BibTeX, dan RIS
+- Cari metadata dari Crossref dan OpenAlex
+- Upload CSV, BibTeX, RIS
 - Input referensi manual
-- Deduplikasi berdasarkan DOI atau kombinasi judul-jurnal-tahun
-- Penandaan kandidat Scopus, Web of Science, dan high-impact journal
-- Ekspor CSV, BibTeX, RIS, dan JSON
+- Deteksi kandidat Scopus/WoS/high impact berbasis metadata
+- Insight bibliometrik sederhana
+- Ekspor CSV, BibTeX, RIS, JSON, dan VOSviewer `.net`
 
-## Cara deploy ke Streamlit Community Cloud
+## Cara Jalankan Lokal
 
-1. Upload isi folder ini ke GitHub.
-2. Pastikan file utama bernama `app.py`.
-3. Masuk ke Streamlit Community Cloud.
-4. Pilih repository, branch `main`, dan main file path `app.py`.
-5. Pada **Advanced settings**, pilih Python **3.12** atau **3.11**.
-6. Klik Deploy.
-
-## Catatan penting
-
-Dari log yang dikirim, Streamlit Cloud memakai Python 3.14.4. Beberapa package Python masih rawan error pada versi terlalu baru. Karena itu versi ini dibuat sangat ringan dan hanya memakai:
-
-```txt
-streamlit>=1.40,<2
-requests>=2.31,<3
+```bash
+pip install -r requirements.txt
+streamlit run app.py
 ```
 
-Jika deployment lama masih memakai Python 3.14, hapus aplikasi di Streamlit Cloud lalu deploy ulang dan pilih Python 3.12/3.11 di Advanced settings.
+## Deploy Streamlit Cloud
 
-## Struktur file
+1. Upload semua file ke GitHub.
+2. Buat app baru di Streamlit Cloud.
+3. Pilih repository dan branch `main`.
+4. Main file path: `app.py`.
+5. Gunakan Python 3.11 atau 3.12 jika tersedia.
 
-```txt
-app.py
-requirements.txt
-.streamlit/config.toml
-data/sample_references.csv
-README.md
-```
+## Catatan Penting
+
+Status Scopus/WoS/high impact di aplikasi ini adalah kandidat berbasis metadata, bukan validasi resmi. Validasi akhir tetap perlu dilakukan di Scopus, Web of Science, JCR, SJR, atau laman resmi jurnal.

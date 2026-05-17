@@ -1,3 +1,4 @@
 title,authors,year,journal,publisher,doi,url,database,impact_factor,abstract,keywords,notes
-Artificial Intelligence in Education: A Review,John Doe; Jane Smith,2024,Computers and Education,Elsevier,10.0000/sample-ai-edu,https://example.com,Crossref,5.5,Sample abstract,AI; education,Sample data
-Bibliometric Analysis of Digital Learning,A. Researcher,2023,IEEE Transactions on Learning Technologies,IEEE,10.0000/sample-biblio,https://example.com,Manual,6.1,Sample abstract,bibliometric; digital learning,Sample data
+Artificial Intelligence in Education: A Bibliometric Review,"Smith, John; Lee, Maria",2023,Computers and Education,Elsevier,10.1234/example.2023.001,https://doi.org/10.1234/example.2023.001,Scopus,6.5,Review of AI in education trends,artificial intelligence; education; bibliometric,EID: SAMPLE001
+Research Trends in Digital Learning,"Ahmad, Rudi; Sari, Lina",2022,Education and Information Technologies,Springer Nature,10.1234/example.2022.002,https://doi.org/10.1234/example.2022.002,Web of Science,4.2,Analysis of digital learning publications,digital learning; e-learning,ESCI
+Bibliometric Mapping of Online Assessment,"Tan, Mei",2021,Journal of Educational Technology,SAGE,10.1234/example.2021.003,https://doi.org/10.1234/example.2021.003,Manual,,Study about online assessment,online assessment; bibliometric,
