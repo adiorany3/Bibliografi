@@ -1,9 +1,20 @@
-# Sistem Bibliografi Riset
+# Sistem Bibliografi Riset - Banyak Sumber Kredibel
 
-Aplikasi Streamlit untuk mengelola bibliografi riset dari Crossref, OpenAlex, file CSV Scopus/WoS, BibTeX, dan RIS.
+Aplikasi Streamlit untuk mengelola bibliografi riset dari banyak sumber kredibel.
+
+## Sumber yang tersedia
+- Crossref
+- OpenAlex
+- PubMed
+- Semantic Scholar
+- DOAJ
+- arXiv
+- Europe PMC
+- CORE
+- Upload Scopus/Web of Science/Dimensions/Lens/Zotero/Mendeley via CSV, RIS, atau BibTeX
 
 ## Fitur
-- Cari metadata dari Crossref dan OpenAlex
+- Cari metadata dari banyak sumber
 - Upload CSV, BibTeX, RIS
 - Input referensi manual
 - Deteksi kandidat Scopus/WoS/high impact berbasis metadata

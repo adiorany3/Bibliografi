@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import re
+import xml.etree.ElementTree as ET
 from collections import Counter
 from typing import Dict, Iterable, List
 
@@ -21,31 +22,48 @@ COLUMNS = [
 
 HIGH_IMPACT_HINTS = [
     "nature", "science", "cell", "lancet", "jama", "new england journal",
-    "ieee transactions", "acm transactions", "review of educational research",
-    "springer nature", "elsevier", "wiley", "taylor & francis", "sage"
+    "ieee transactions", "acm transactions", "acm computing surveys",
+    "review of educational research", "springer nature", "elsevier",
+    "wiley", "taylor & francis", "sage", "oxford university press",
+    "cambridge university press", "mit press", "bmj", "plos biology",
+    "annual reviews"
 ]
 
-SCOPUS_HINTS = ["scopus", "elsevier", "eid", "source-id", "source id", "citescore"]
+SCOPUS_HINTS = [
+    "scopus", "elsevier", "eid", "source-id", "source id",
+    "citescore", "sciencedirect"
+]
+
 WOS_HINTS = [
     "web of science", "wos", "clarivate", "sci-expanded", "ssci",
-    "ahci", "esci", "journal citation reports", "jcr"
+    "ahci", "esci", "journal citation reports", "jcr", "isi"
 ]
+
+SOURCE_HELP = {
+    "Crossref": "Metadata DOI lintas publisher akademik.",
+    "OpenAlex": "Database open bibliographic besar untuk karya ilmiah.",
+    "PubMed": "Literatur biomedis dari NCBI/NLM.",
+    "Semantic Scholar": "Indeks AI2 untuk paper dan metadata akademik.",
+    "DOAJ": "Directory of Open Access Journals.",
+    "arXiv": "Preprint kredibel untuk CS, matematika, fisika, statistik, dan bidang terkait.",
+    "Europe PMC": "Literatur biomedis dan life sciences.",
+    "CORE": "Agregator open access repositories. Kadang membutuhkan API key/akses tertentu.",
+}
 
 
 # =========================
 # Utility
 # =========================
 def clean(value: object) -> str:
-    """Clean text from HTML, weird spaces, and duplicated whitespace."""
     if value is None:
         return ""
     text = str(value).replace("\u00a0", " ")
     text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"&[a-zA-Z]+;", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
 def first(row: Dict[str, object], keys: Iterable[str]) -> str:
-    """Return first non-empty value from possible column names."""
     lowered = {str(k).strip().lower(): v for k, v in row.items()}
     for key in keys:
         val = clean(lowered.get(key.lower(), ""))
@@ -55,26 +73,31 @@ def first(row: Dict[str, object], keys: Iterable[str]) -> str:
 
 
 def doi_from_text(text: str) -> str:
-    """Extract DOI from a text/url."""
     match = re.search(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", clean(text), re.I)
     return match.group(0).strip(".,;) ").lower() if match else ""
 
 
-def year_from_text(text: str) -> str:
+def year_from_text(text: object) -> str:
     match = re.search(r"(?:19|20)\d{2}", clean(text))
     return match.group(0) if match else clean(text)
 
 
 def authors_to_text(authors: object) -> str:
     if isinstance(authors, list):
-        return "; ".join(clean(a) for a in authors if clean(a))
+        cleaned = []
+        for a in authors:
+            if isinstance(a, dict):
+                name = a.get("name") or a.get("display_name") or a.get("full_name") or ""
+                cleaned.append(clean(name))
+            else:
+                cleaned.append(clean(a))
+        return "; ".join(a for a in cleaned if a)
     text = clean(authors)
     text = re.sub(r"\s+and\s+", "; ", text, flags=re.I)
-    return text.replace("|", ";").replace(",", ", ")
+    return text.replace("|", ";")
 
 
 def classify(row: Dict[str, str]) -> tuple[str, str]:
-    """Heuristic classification. Official indexing still needs manual validation."""
     joined = " ".join(
         row.get(k, "") for k in ["journal", "publisher", "database", "notes", "url", "keywords"]
     ).lower()
@@ -110,26 +133,25 @@ def classify(row: Dict[str, str]) -> tuple[str, str]:
 
 
 def standardize(records: Iterable[Dict[str, object]]) -> List[Dict[str, str]]:
-    """Normalize records from many sources into a single column format."""
     output: List[Dict[str, str]] = []
     seen = set()
 
     for raw in records:
-        title = first(raw, ["title", "article title", "document title", "judul", "dc:title", "ti"])
-        doi = doi_from_text(first(raw, ["doi", "prism:doi", "di", "url", "link", "DOI"]))
+        title = first(raw, ["title", "article title", "document title", "judul", "dc:title", "ti", "name"])
+        doi = doi_from_text(first(raw, ["doi", "prism:doi", "di", "url", "link", "DOI", "externalids"]))
         journal = first(raw, [
             "journal", "source title", "publication name", "container title",
-            "source", "booktitle", "so", "journal/book"
+            "source", "booktitle", "so", "journal/book", "venue"
         ])
 
         row = {
             "title": title,
             "authors": authors_to_text(first(raw, [
-                "authors", "author", "creators", "penulis", "dc:creator", "au"
+                "authors", "author", "creators", "penulis", "dc:creator", "au", "authorstring"
             ])),
             "year": year_from_text(first(raw, [
                 "year", "publication year", "published year", "cover date",
-                "date", "publication date", "py"
+                "date", "publication date", "py", "published", "published_date"
             ])),
             "journal": journal,
             "publisher": first(raw, ["publisher", "publisher name", "host organization name"]),
@@ -139,7 +161,7 @@ def standardize(records: Iterable[Dict[str, object]]) -> List[Dict[str, str]]:
             "impact_factor": first(raw, ["impact factor", "impact_factor", "jif", "citescore", "sjr"]),
             "abstract": first(raw, ["abstract", "description", "ab"]),
             "keywords": first(raw, ["keywords", "author keywords", "index keywords", "keyword", "de"]),
-            "notes": first(raw, ["notes", "eid", "ut", "accession number", "document type"]),
+            "notes": first(raw, ["notes", "eid", "ut", "accession number", "document type", "type"]),
         }
 
         if not row["title"] and not row["doi"]:
@@ -219,11 +241,11 @@ def parse_ris(text: str) -> List[Dict[str, str]]:
 
 
 # =========================
-# Public metadata APIs
+# Credible metadata sources
 # =========================
 def search_crossref(query: str, rows: int, email: str) -> List[Dict[str, str]]:
     headers = {
-        "User-Agent": f"BibliografiStreamlit/5.0 (mailto:{email or 'example@example.com'})"
+        "User-Agent": f"BibliografiStreamlit/6.0 (mailto:{email or 'example@example.com'})"
     }
     params = {"query.bibliographic": query, "rows": min(rows, 100), "sort": "relevance"}
     r = requests.get("https://api.crossref.org/works", params=params, headers=headers, timeout=25)
@@ -290,10 +312,268 @@ def search_openalex(query: str, rows: int, email: str) -> List[Dict[str, str]]:
             "doi": doi,
             "url": item.get("id", ""),
             "database": "OpenAlex",
-            "keywords": "; ".join(c.get("display_name", "") for c in item.get("concepts", [])[:6]),
+            "keywords": "; ".join(c.get("display_name", "") for c in item.get("concepts", [])[:8]),
         })
 
     return standardize(records)
+
+
+def search_pubmed(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    params = {
+        "db": "pubmed",
+        "term": query,
+        "retmax": min(rows, 100),
+        "retmode": "json",
+        "sort": "relevance",
+    }
+    if email:
+        params["email"] = email
+
+    s = requests.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi", params=params, timeout=25)
+    s.raise_for_status()
+    ids = s.json().get("esearchresult", {}).get("idlist", [])
+
+    if not ids:
+        return []
+
+    summary_params = {
+        "db": "pubmed",
+        "id": ",".join(ids[: min(rows, 100)]),
+        "retmode": "json",
+    }
+    if email:
+        summary_params["email"] = email
+
+    r = requests.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi", params=summary_params, timeout=25)
+    r.raise_for_status()
+
+    result = r.json().get("result", {})
+    records = []
+
+    for pmid in result.get("uids", []):
+        item = result.get(pmid, {})
+        authors = [a.get("name", "") for a in item.get("authors", [])]
+        article_ids = item.get("articleids", [])
+        doi = ""
+        for aid in article_ids:
+            if aid.get("idtype") == "doi":
+                doi = aid.get("value", "")
+                break
+
+        records.append({
+            "title": item.get("title", ""),
+            "authors": authors,
+            "year": year_from_text(item.get("pubdate", "")),
+            "journal": item.get("fulljournalname", "") or item.get("source", ""),
+            "publisher": "NCBI/NLM",
+            "doi": doi,
+            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+            "database": "PubMed",
+            "notes": item.get("pubtype", ""),
+        })
+
+    return standardize(records)
+
+
+def search_semantic_scholar(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    params = {
+        "query": query,
+        "limit": min(rows, 100),
+        "fields": "title,authors,year,venue,publicationVenue,externalIds,url,abstract,fieldsOfStudy,publicationTypes"
+    }
+    headers = {"User-Agent": "BibliografiStreamlit/6.0"}
+    r = requests.get("https://api.semanticscholar.org/graph/v1/paper/search", params=params, headers=headers, timeout=25)
+    r.raise_for_status()
+
+    records = []
+    for item in r.json().get("data", []):
+        external = item.get("externalIds") or {}
+        authors = [a.get("name", "") for a in item.get("authors", [])]
+        pub_venue = item.get("publicationVenue") or {}
+
+        records.append({
+            "title": item.get("title", ""),
+            "authors": authors,
+            "year": item.get("year", ""),
+            "journal": pub_venue.get("name", "") or item.get("venue", ""),
+            "publisher": "Semantic Scholar / AI2",
+            "doi": external.get("DOI", ""),
+            "url": item.get("url", ""),
+            "database": "Semantic Scholar",
+            "abstract": item.get("abstract", ""),
+            "keywords": "; ".join(item.get("fieldsOfStudy") or []),
+            "notes": "; ".join(item.get("publicationTypes") or []),
+        })
+
+    return standardize(records)
+
+
+def search_doaj(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    params = {"pageSize": min(rows, 100)}
+    url = f"https://doaj.org/api/search/articles/{requests.utils.quote(query)}"
+    r = requests.get(url, params=params, timeout=25)
+    r.raise_for_status()
+
+    records = []
+    for item in r.json().get("results", []):
+        bib = item.get("bibjson", {})
+        authors = [a.get("name", "") for a in bib.get("author", [])]
+        journal = bib.get("journal", {}) or {}
+        links = bib.get("link", []) or []
+        url_value = ""
+        for link in links:
+            if isinstance(link, dict) and link.get("url"):
+                url_value = link.get("url")
+                break
+
+        records.append({
+            "title": bib.get("title", ""),
+            "authors": authors,
+            "year": bib.get("year", ""),
+            "journal": journal.get("title", ""),
+            "publisher": bib.get("publisher", "") or journal.get("publisher", ""),
+            "doi": bib.get("identifier", [{}])[0].get("id", "") if bib.get("identifier") else "",
+            "url": url_value,
+            "database": "DOAJ",
+            "abstract": bib.get("abstract", ""),
+            "keywords": "; ".join(bib.get("keywords", []) or []),
+            "notes": "Open Access Journal",
+        })
+
+    return standardize(records)
+
+
+def search_arxiv(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    params = {
+        "search_query": f"all:{query}",
+        "start": 0,
+        "max_results": min(rows, 100),
+        "sortBy": "relevance",
+        "sortOrder": "descending",
+    }
+    r = requests.get("https://export.arxiv.org/api/query", params=params, timeout=25)
+    r.raise_for_status()
+
+    root = ET.fromstring(r.content)
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "arxiv": "http://arxiv.org/schemas/atom",
+    }
+
+    records = []
+    for entry in root.findall("atom:entry", ns):
+        title = entry.findtext("atom:title", default="", namespaces=ns)
+        published = entry.findtext("atom:published", default="", namespaces=ns)
+        summary = entry.findtext("atom:summary", default="", namespaces=ns)
+        arxiv_url = entry.findtext("atom:id", default="", namespaces=ns)
+        journal_ref = entry.findtext("arxiv:journal_ref", default="", namespaces=ns)
+        doi = entry.findtext("arxiv:doi", default="", namespaces=ns)
+
+        authors = []
+        for author in entry.findall("atom:author", ns):
+            name = author.findtext("atom:name", default="", namespaces=ns)
+            if name:
+                authors.append(name)
+
+        categories = [cat.attrib.get("term", "") for cat in entry.findall("atom:category", ns)]
+
+        records.append({
+            "title": clean(title),
+            "authors": authors,
+            "year": year_from_text(published),
+            "journal": journal_ref or "arXiv",
+            "publisher": "arXiv",
+            "doi": doi,
+            "url": arxiv_url,
+            "database": "arXiv",
+            "abstract": clean(summary),
+            "keywords": "; ".join(categories),
+            "notes": "Preprint",
+        })
+
+    return standardize(records)
+
+
+def search_europe_pmc(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    params = {
+        "query": query,
+        "pageSize": min(rows, 100),
+        "format": "json",
+        "resultType": "core",
+    }
+    r = requests.get("https://www.ebi.ac.uk/europepmc/webservices/rest/search", params=params, timeout=25)
+    r.raise_for_status()
+
+    records = []
+    for item in r.json().get("resultList", {}).get("result", []):
+        records.append({
+            "title": item.get("title", ""),
+            "authors": item.get("authorString", ""),
+            "year": item.get("pubYear", ""),
+            "journal": item.get("journalTitle", ""),
+            "publisher": "Europe PMC",
+            "doi": item.get("doi", ""),
+            "url": item.get("fullTextUrlList", {}).get("fullTextUrl", [{}])[0].get("url", "") if item.get("fullTextUrlList") else "",
+            "database": "Europe PMC",
+            "abstract": item.get("abstractText", ""),
+            "keywords": item.get("meshHeadingList", ""),
+            "notes": item.get("pubType", ""),
+        })
+
+    return standardize(records)
+
+
+def search_core(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    """CORE can reject calls without API access. This function fails gracefully."""
+    params = {"q": query, "limit": min(rows, 100)}
+    r = requests.get("https://api.core.ac.uk/v3/search/works", params=params, timeout=25)
+    r.raise_for_status()
+
+    records = []
+    for item in r.json().get("results", []):
+        authors = []
+        for a in item.get("authors", []) or []:
+            if isinstance(a, dict):
+                authors.append(a.get("name", ""))
+            else:
+                authors.append(str(a))
+
+        links = item.get("links") or []
+        url_value = ""
+        if links and isinstance(links[0], dict):
+            url_value = links[0].get("url", "")
+
+        journal = item.get("journal")
+        if isinstance(journal, dict):
+            journal = journal.get("title", "")
+
+        records.append({
+            "title": item.get("title", ""),
+            "authors": authors,
+            "year": year_from_text(item.get("publishedDate", "")),
+            "journal": journal or "",
+            "publisher": item.get("publisher", ""),
+            "doi": item.get("doi", ""),
+            "url": url_value,
+            "database": "CORE",
+            "abstract": item.get("abstract", ""),
+            "keywords": "; ".join(item.get("topics", []) or []),
+            "notes": "Open access repository",
+        })
+
+    return standardize(records)
+
+
+SOURCE_FUNCTIONS = {
+    "Crossref": search_crossref,
+    "OpenAlex": search_openalex,
+    "PubMed": search_pubmed,
+    "Semantic Scholar": search_semantic_scholar,
+    "DOAJ": search_doaj,
+    "arXiv": search_arxiv,
+    "Europe PMC": search_europe_pmc,
+    "CORE": search_core,
+}
 
 
 # =========================
@@ -507,6 +787,7 @@ def build_report(records: List[Dict[str, str]]) -> str:
     top_authors = author_distribution(records, 10)
     top_journals = count_by(records, "journal", 10)
     top_keywords = keyword_distribution(records, 10)
+    top_db = count_by(records, "database", 20)
 
     period = "N/A"
     if years:
@@ -520,6 +801,9 @@ Ringkasan:
 - DOI tersedia: {m['with_doi']}
 - Abstrak tersedia: {m['with_abstract']}
 - Keywords tersedia: {m['with_keywords']}
+
+Sumber data:
+{chr(10).join([f"- {k}: {v}" for k, v in top_db.items()]) or "-"}
 
 Kualitas dan indeksasi:
 - Kandidat Scopus: {m['scopus']}
@@ -563,8 +847,7 @@ if "records" not in st.session_state:
 
 st.title("📚 Sistem Bibliografi Riset")
 st.caption(
-    "Kelola bibliografi dari Crossref, OpenAlex, file Scopus/WoS, dan identifikasi kandidat jurnal bereputasi tinggi. "
-    "Validasi indeks resmi tetap dilakukan manual."
+    "Kelola bibliografi dari banyak sumber kredibel: Crossref, OpenAlex, PubMed, Semantic Scholar, DOAJ, arXiv, Europe PMC, CORE, dan file ekspor Scopus/WoS."
 )
 
 with st.sidebar:
@@ -591,45 +874,61 @@ with st.sidebar:
             except Exception as exc:
                 st.error(f"Sample gagal dimuat: {exc}")
 
-search_tab, upload_tab, manual_tab, data_tab, insights_tab, export_tab, guide_tab = st.tabs([
-    "🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📈 Insight", "📤 Ekspor", "🚀 Panduan"
+search_tab, upload_tab, manual_tab, data_tab, insights_tab, export_tab, source_tab, guide_tab = st.tabs([
+    "🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📈 Insight", "📤 Ekspor", "🌐 Sumber", "🚀 Panduan"
 ])
 
 with search_tab:
-    st.subheader("🔎 Cari Metadata Bibliografi")
+    st.subheader("🔎 Cari Metadata Bibliografi dari Banyak Sumber")
     query = st.text_input("Topik/keyword riset", placeholder="Contoh: artificial intelligence education bibliometric")
-    sources = st.multiselect("Sumber", ["Crossref", "OpenAlex"], default=["Crossref", "OpenAlex"])
 
-    if st.button("Cari & gabungkan", type="primary", use_container_width=True):
+    default_sources = ["Crossref", "OpenAlex", "PubMed", "Semantic Scholar", "DOAJ", "arXiv", "Europe PMC"]
+    sources = st.multiselect(
+        "Pilih sumber kredibel",
+        list(SOURCE_FUNCTIONS.keys()),
+        default=default_sources,
+        help="Semakin banyak sumber dipilih, hasil makin banyak tetapi proses lebih lama."
+    )
+
+    with st.expander("Keterangan sumber"):
+        for src, desc in SOURCE_HELP.items():
+            st.write(f"**{src}:** {desc}")
+
+    if st.button("Cari & gabungkan semua sumber", type="primary", use_container_width=True):
         if not query.strip():
             st.warning("Keyword masih kosong.")
+        elif not sources:
+            st.warning("Pilih minimal satu sumber.")
         else:
             found = []
             errors = []
 
-            with st.spinner("Mengambil data bibliografi..."):
-                if "Crossref" in sources:
-                    try:
-                        found += search_crossref(query, rows, email)
-                    except Exception as exc:
-                        errors.append(f"Crossref: {exc}")
+            progress = st.progress(0)
+            status_box = st.empty()
 
-                if "OpenAlex" in sources:
-                    try:
-                        found += search_openalex(query, rows, email)
-                    except Exception as exc:
-                        errors.append(f"OpenAlex: {exc}")
+            for i, source in enumerate(sources, start=1):
+                status_box.info(f"Mengambil data dari {source}...")
+                try:
+                    results = SOURCE_FUNCTIONS[source](query, rows, email)
+                    found += results
+                    st.write(f"✅ {source}: {len(results)} record")
+                except Exception as exc:
+                    errors.append(f"{source}: {exc}")
+                    st.write(f"⚠️ {source}: gagal/terbatas")
+                progress.progress(i / len(sources))
 
             add_records(found)
-            st.success(f"Selesai. Data baru terbaca: {len(found)}. Total record unik: {len(st.session_state.records)}")
+            status_box.success(f"Selesai. Data baru terbaca: {len(found)}. Total record unik: {len(st.session_state.records)}")
 
             if errors:
-                st.error("Sebagian sumber gagal:\n" + "\n".join("- " + e for e in errors))
+                with st.expander("Detail sumber yang gagal"):
+                    for e in errors:
+                        st.write(f"- {e}")
 
 with upload_tab:
     st.subheader("⬆️ Upload File Bibliografi")
     st.write("Format yang didukung: CSV, BibTeX `.bib`, RIS `.ris`, dan `.txt` berisi BibTeX/RIS.")
-    st.info("Untuk Scopus/WoS, ekspor sebagai CSV agar kolom metadata lebih stabil terbaca di Streamlit Cloud.")
+    st.info("Untuk Scopus, Web of Science, Dimensions, Lens, Zotero, atau Mendeley, ekspor sebagai CSV/BibTeX/RIS.")
 
     uploaded = st.file_uploader("Pilih file", type=["csv", "bib", "ris", "txt"])
 
@@ -668,7 +967,7 @@ with manual_tab:
             url = st.text_input("URL")
             database = st.selectbox(
                 "Database",
-                ["Manual", "Scopus", "Web of Science", "SINTA", "Google Scholar", "Crossref", "OpenAlex", "Lainnya"]
+                ["Manual", "Scopus", "Web of Science", "SINTA", "Google Scholar", "Crossref", "OpenAlex", "PubMed", "Semantic Scholar", "DOAJ", "arXiv", "Europe PMC", "CORE", "Lainnya"]
             )
             impact = st.text_input("Impact Factor/JIF/CiteScore")
 
@@ -814,7 +1113,7 @@ with insights_tab:
 
         with right:
             st.write("### Distribusi Database")
-            dbs = count_by(records, "database", 10)
+            dbs = count_by(records, "database", 20)
             if dbs:
                 st.bar_chart(dbs)
             else:
@@ -992,6 +1291,24 @@ with export_tab:
         else:
             st.warning("Tidak ada referensi sesuai filter untuk diekspor.")
 
+with source_tab:
+    st.subheader("🌐 Daftar Sumber Kredibel")
+    st.write("Aplikasi ini memakai sumber terbuka/kredibel yang relatif aman untuk Streamlit Cloud tanpa library berat.")
+    for src, desc in SOURCE_HELP.items():
+        st.markdown(f"- **{src}**: {desc}")
+
+    st.divider()
+    st.write("### Sumber berbayar/berlangganan")
+    st.markdown("""
+- **Scopus**: gunakan ekspor CSV/RIS/BibTeX dari akun institusi, lalu upload ke tab Upload.
+- **Web of Science**: gunakan ekspor CSV/RIS/BibTeX dari akun institusi, lalu upload ke tab Upload.
+- **Journal Citation Reports/JCR**: gunakan untuk validasi Impact Factor resmi.
+- **Scimago/SJR**: gunakan untuk validasi quartile dan SJR.
+- **Dimensions/Lens**: bisa digunakan lewat ekspor CSV/RIS/BibTeX.
+""")
+
+    st.warning("Catatan: status Scopus/WoS/high impact di aplikasi ini adalah kandidat berbasis metadata, bukan verifikasi resmi.")
+
 with guide_tab:
     st.subheader("🚀 Panduan Penggunaan & Deploy")
 
@@ -1000,7 +1317,7 @@ with guide_tab:
     with usage_tab:
         st.markdown("""
 ### Cara Pakai
-1. **Cari** referensi dari Crossref dan OpenAlex.
+1. **Cari** referensi dari banyak sumber kredibel.
 2. **Upload** file bibliografi dari Scopus/WoS/Zotero/Mendeley dalam format CSV, BibTeX, atau RIS.
 3. **Manual** untuk menambahkan referensi satu per satu.
 4. **Data** untuk melihat, memfilter, dan mengecek detail referensi.
@@ -1031,7 +1348,9 @@ README.md
     with tips_tab:
         st.markdown("""
 ### Tips
-- Untuk Scopus/WoS, ekspor sebagai **CSV** agar kolom mudah dibaca.
+- Untuk Scopus/WoS, ekspor sebagai **CSV/RIS/BibTeX**.
+- Semakin banyak sumber dipilih, hasil makin banyak tetapi proses pencarian lebih lama.
+- Jika satu sumber gagal, aplikasi tetap melanjutkan sumber lain.
 - Masukkan DOI sebanyak mungkin agar deduplikasi lebih akurat.
 - Status Scopus/WoS/high impact di aplikasi ini adalah **kandidat berbasis metadata**, bukan validasi resmi.
 - Validasi akhir tetap lakukan melalui Scopus, Web of Science, JCR, SJR, atau laman resmi jurnal.
