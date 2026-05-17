@@ -587,8 +587,7 @@ SOURCE_FUNCTIONS = {
     "DOAJ": search_doaj,
     "arXiv": search_arxiv,
     "Europe PMC": search_europe_pmc,
-    "CORE": search_core,
-}
+    }
 
 
 # =========================
@@ -2284,6 +2283,459 @@ def render_meta_auto_tab():
                 )
 
 
+
+# =========================
+# Unified Theme Workflow: Bibliography + Meta-analysis
+# =========================
+def keyword_tokens_for_theme(theme: str) -> List[str]:
+    stopwords = {
+        "the", "and", "or", "of", "in", "on", "for", "to", "a", "an", "with", "by",
+        "dan", "atau", "yang", "di", "ke", "dari", "untuk", "dengan", "pada", "dalam",
+        "analisis", "analysis", "bibliometric", "bibliografi", "meta", "study", "research",
+    }
+    tokens = re.findall(r"[A-Za-zÀ-ÿ0-9]+", theme.lower())
+    return [t for t in tokens if len(t) >= 3 and t not in stopwords]
+
+
+def relevance_score_for_theme(record: Dict[str, str], theme: str) -> float:
+    tokens = keyword_tokens_for_theme(theme)
+    if not tokens:
+        return 0.0
+
+    title = record.get("title", "").lower()
+    abstract = record.get("abstract", "").lower()
+    keywords = record.get("keywords", "").lower()
+    journal = record.get("journal", "").lower()
+
+    score = 0.0
+    for token in tokens:
+        if token in title:
+            score += 3.0
+        if token in keywords:
+            score += 2.0
+        if token in abstract:
+            score += 1.5
+        if token in journal:
+            score += 0.5
+
+    phrase = theme.lower().strip()
+    if phrase and phrase in title:
+        score += 5.0
+    if phrase and phrase in abstract:
+        score += 3.0
+
+    return score
+
+
+def filter_theme_records(records: List[Dict[str, str]], theme: str, min_score: float = 1.0) -> List[Dict[str, str]]:
+    scored = []
+    for record in records:
+        score = relevance_score_for_theme(record, theme)
+        if score >= min_score:
+            enriched = dict(record)
+            enriched["theme_relevance_score"] = f"{score:.2f}"
+            scored.append(enriched)
+    return sorted(scored, key=lambda x: float(x.get("theme_relevance_score", "0")), reverse=True)
+
+
+def auto_select_sources_for_theme(theme: str) -> List[str]:
+    text = theme.lower()
+    sources = ["Crossref", "OpenAlex", "Semantic Scholar", "DOAJ"]
+
+    health_terms = ["health", "medical", "medicine", "clinical", "patient", "disease", "biomedical", "nursing", "public health", "kesehatan", "medis", "pasien"]
+    tech_terms = ["computer", "machine learning", "artificial intelligence", "ai", "deep learning", "algorithm", "software", "data science"]
+    physics_terms = ["physics", "mathematics", "statistic", "preprint", "quantum", "astronomy"]
+
+    if any(term in text for term in health_terms):
+        sources += ["PubMed", "Europe PMC"]
+    if any(term in text for term in tech_terms + physics_terms):
+        sources += ["arXiv"]
+
+    # keep order and remove missing/error-prone unavailable functions
+    available = [s for s in sources if s in SOURCE_FUNCTIONS]
+    return list(dict.fromkeys(available))
+
+
+def extract_effect_from_text_for_meta(record: Dict[str, str]):
+    text = " ".join([
+        record.get("title", ""),
+        record.get("abstract", ""),
+        record.get("notes", ""),
+    ])
+    clean_text = clean(text)
+
+    # Generic patterns: effect size = 0.35, Cohen's d = 0.5, Hedges g = 0.42
+    patterns = [
+        (r"(?:effect\s*size|hedges'?s?\s*g|cohen'?s?\s*d|standardized\s*mean\s*difference|smd)\s*(?:=|:|was|of)?\s*(-?\d+(?:\.\d+)?)", "Generic/SMD"),
+        (r"(?:odds\s*ratio|or)\s*(?:=|:|was|of)?\s*(\d+(?:\.\d+)?)", "OR"),
+        (r"(?:risk\s*ratio|relative\s*risk|rr)\s*(?:=|:|was|of)?\s*(\d+(?:\.\d+)?)", "RR"),
+        (r"(?:correlation|pearson'?s?\s*r|r)\s*(?:=|:|was|of)?\s*(-?0?\.\d+)", "Correlation"),
+    ]
+
+    ci_pattern = r"(?:95\s*%?\s*ci|confidence\s*interval)\s*(?:=|:)?\s*\[?\s*(-?\d+(?:\.\d+)?)\s*(?:,|to|-|–)\s*(-?\d+(?:\.\d+)?)\s*\]?"
+    ci_match = re.search(ci_pattern, clean_text, flags=re.I)
+
+    for pattern, effect_type in patterns:
+        m = re.search(pattern, clean_text, flags=re.I)
+        if not m:
+            continue
+
+        value = _auto_float(m.group(1))
+        if value is None:
+            continue
+
+        # Convert OR/RR to log scale for pooling.
+        if effect_type == "OR" and value > 0:
+            yi = math.log(value)
+            label = "log(OR) auto-extracted"
+        elif effect_type == "RR" and value > 0:
+            yi = math.log(value)
+            label = "log(RR) auto-extracted"
+        elif effect_type == "Correlation":
+            # no n available, cannot compute SE safely
+            yi = value
+            label = "Correlation detected; SE needs manual input"
+        else:
+            yi = value
+            label = "Effect size auto-extracted"
+
+        se = None
+        if ci_match:
+            lo = _auto_float(ci_match.group(1))
+            hi = _auto_float(ci_match.group(2))
+            if lo is not None and hi is not None and hi != lo:
+                # If OR/RR CI is positive, convert to log CI.
+                if effect_type in ["OR", "RR"] and lo > 0 and hi > 0:
+                    lo = math.log(lo)
+                    hi = math.log(hi)
+                se = abs(hi - lo) / (2 * 1.96)
+
+        if se is not None and se > 0:
+            return {
+                "study_id": f"{record.get('authors', '').split(';')[0]} {record.get('year', '')}".strip() or record.get("title", "Study")[:40],
+                "year": record.get("year", ""),
+                "group": "Auto-extracted",
+                "effect_type": label,
+                "effect_size": yi,
+                "standard_error": se,
+                "variance": se ** 2,
+                "notes": "Auto-extracted from title/abstract. Verify with full-text before final use.",
+            }
+
+    return None
+
+
+def bibliographic_to_meta_theme_rows(records: List[Dict[str, str]], theme: str) -> List[Dict[str, str]]:
+    rows = bibliographic_records_to_meta_format(records)
+    for row in rows:
+        row["group"] = theme
+        row["outcome"] = theme
+        row["notes"] = "Tema sesuai pencarian. Isi effect size/SE dari full-text atau gunakan data mentah."
+    return rows
+
+
+def build_bibliography_theme_insight(records: List[Dict[str, str]], theme: str) -> str:
+    if not records:
+        return "Belum ada referensi yang relevan dengan tema."
+
+    metrics = get_basic_metrics(records) if "get_basic_metrics" in globals() else {}
+    years = year_distribution(records) if "year_distribution" in globals() else {}
+    journals = count_by(records, "journal", 10) if "count_by" in globals() else {}
+    dbs = count_by(records, "database", 10) if "count_by" in globals() else {}
+    authors = author_distribution(records, 10) if "author_distribution" in globals() else {}
+    keywords = keyword_distribution(records, 10) if "keyword_distribution" in globals() else {}
+
+    period = "tidak tersedia"
+    if years:
+        period = f"{min(years.keys())}–{max(years.keys())}"
+
+    doi_pct = (metrics.get("with_doi", 0) / len(records) * 100) if records else 0
+    abstract_pct = (metrics.get("with_abstract", 0) / len(records) * 100) if records else 0
+
+    lines = [
+        f"INSIGHT BIBLIOGRAFI UNTUK TEMA: {theme}",
+        "",
+        "1. Ringkasan dataset",
+        f"- Total referensi relevan: {len(records)}.",
+        f"- Periode publikasi: {period}.",
+        f"- DOI tersedia: {metrics.get('with_doi', 0)} ({doi_pct:.1f}%).",
+        f"- Abstrak tersedia: {metrics.get('with_abstract', 0)} ({abstract_pct:.1f}%).",
+        f"- Kandidat Scopus/WoS/high impact: {metrics.get('scopus', 0) + metrics.get('wos', 0) + metrics.get('high', 0)}.",
+        "",
+        "2. Sumber data dominan",
+    ]
+    lines += [f"- {k}: {v}" for k, v in dbs.items()] or ["- Tidak tersedia."]
+
+    lines += ["", "3. Jurnal dominan"]
+    lines += [f"- {k}: {v}" for k, v in journals.items()] or ["- Tidak tersedia."]
+
+    lines += ["", "4. Penulis dominan"]
+    lines += [f"- {k}: {v}" for k, v in authors.items()] or ["- Tidak tersedia."]
+
+    lines += ["", "5. Keyword/tema yang sering muncul"]
+    lines += [f"- {k}: {v}" for k, v in keywords.items()] or ["- Tidak tersedia."]
+
+    lines += [
+        "",
+        "6. Rekomendasi",
+        "- Gunakan referensi dengan DOI dan abstrak lengkap sebagai prioritas screening.",
+        "- Validasi indeks Scopus/WoS/JCR/SJR secara manual untuk referensi kunci.",
+        "- Untuk meta-analysis, lanjutkan dengan full-text screening dan ekstraksi effect size/SE.",
+    ]
+
+    return "\n".join(lines)
+
+
+def render_theme_biblio_meta_tab():
+    st.subheader("🔬 Tema → Bibliografi + Meta-Analisis")
+    st.caption("Workflow otomatis: cari tema, filter bibliografi relevan, siapkan format meta-analysis, dan olah effect size jika tersedia.")
+
+    if "theme_records" not in st.session_state:
+        st.session_state.theme_records = []
+    if "theme_meta_studies" not in st.session_state:
+        st.session_state.theme_meta_studies = []
+
+    tab_run, tab_biblio, tab_meta, tab_export = st.tabs([
+        "🔎 Proses Tema", "📚 Hasil Bibliografi", "🧪 Meta-Analisis", "📤 Export"
+    ])
+
+    with tab_run:
+        theme = st.text_input(
+            "Tema/topik penelitian",
+            placeholder="Contoh: artificial intelligence in education, digital learning achievement, public health intervention",
+            key="theme_workflow_query"
+        )
+        col_a, col_b = st.columns([2, 1])
+        with col_a:
+            mode = st.radio(
+                "Mode sumber",
+                ["Otomatis sesuai tema", "Pilih manual"],
+                horizontal=True,
+                key="theme_source_mode"
+            )
+        with col_b:
+            min_score = st.slider("Batas relevansi", 0.0, 5.0, 1.0, 0.5)
+
+        suggested = auto_select_sources_for_theme(theme) if theme else ["Crossref", "OpenAlex", "Semantic Scholar", "DOAJ"]
+        if mode == "Pilih manual":
+            selected_sources = st.multiselect(
+                "Sumber bibliografi",
+                [s for s in SOURCE_FUNCTIONS.keys() if s != "CORE"],
+                default=suggested,
+                key="theme_manual_sources"
+            )
+        else:
+            selected_sources = suggested
+            st.write("Sumber otomatis:", ", ".join(selected_sources))
+
+        max_rows = st.slider("Jumlah hasil per sumber", 5, 100, 20, 5, key="theme_rows")
+
+        if st.button("🚀 Cari Bibliografi & Siapkan Meta-Analisis", type="primary", use_container_width=True):
+            if not theme.strip():
+                st.warning("Tema belum diisi.")
+            elif not selected_sources:
+                st.warning("Tidak ada sumber yang dipilih.")
+            else:
+                found = []
+                errors = []
+                progress = st.progress(0)
+                status = st.empty()
+
+                for i, source in enumerate(selected_sources, start=1):
+                    status.info(f"Mencari dari {source}...")
+                    try:
+                        results = SOURCE_FUNCTIONS[source](theme, max_rows, email if "email" in globals() else "")
+                        found += results
+                        st.write(f"✅ {source}: {len(results)} record")
+                    except Exception as exc:
+                        errors.append(f"{source}: {exc}")
+                        st.write(f"⚠️ {source}: dilewati karena gagal/rate-limit")
+                    progress.progress(i / len(selected_sources))
+
+                unique_found = standardize(found)
+                relevant = filter_theme_records(unique_found, theme, min_score=min_score)
+
+                st.session_state.theme_records = relevant
+                # Also merge to global records so other tabs can use them.
+                add_records(relevant)
+
+                meta_rows = bibliographic_to_meta_theme_rows(relevant, theme)
+                auto_meta = []
+                for r in relevant:
+                    item = extract_effect_from_text_for_meta(r)
+                    if item:
+                        auto_meta.append(item)
+                st.session_state.theme_meta_studies = auto_meta
+
+                status.success(
+                    f"Selesai. Ditemukan {len(unique_found)} record unik, {len(relevant)} relevan dengan tema, "
+                    f"dan {len(auto_meta)} studi memiliki effect size yang dapat dibaca otomatis."
+                )
+
+                if errors:
+                    with st.expander("Sumber yang gagal/dilewati"):
+                        for err in errors:
+                            st.write(f"- {err}")
+
+                if not auto_meta:
+                    st.info("Belum ada effect size + CI/SE yang cukup jelas di metadata. Download format meta-analysis, isi dari full-text, lalu upload di tab Meta Otomatis.")
+
+    with tab_biblio:
+        records = st.session_state.get("theme_records", [])
+        theme = st.session_state.get("theme_workflow_query", "")
+
+        if not records:
+            st.info("Belum ada hasil. Jalankan proses di tab Proses Tema.")
+        else:
+            st.write(f"### Hasil Bibliografi Relevan: {theme}")
+            m = get_basic_metrics(records)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Referensi relevan", len(records))
+            c2.metric("Dengan DOI", m.get("with_doi", 0))
+            c3.metric("Dengan abstrak", m.get("with_abstract", 0))
+            c4.metric("Kandidat indeks", m.get("scopus", 0) + m.get("wos", 0) + m.get("high", 0))
+
+            display = []
+            for r in records:
+                display.append({
+                    "Skor": r.get("theme_relevance_score", ""),
+                    "Judul": r.get("title", "")[:80] + ("..." if len(r.get("title", "")) > 80 else ""),
+                    "Tahun": r.get("year", ""),
+                    "Jurnal": r.get("journal", "")[:45],
+                    "Database": r.get("database", ""),
+                    "DOI": r.get("doi", ""),
+                })
+            st.dataframe(display, use_container_width=True, height=430)
+
+            st.write("### Insight Bibliografi")
+            insight = build_bibliography_theme_insight(records, theme)
+            st.text_area("Insight otomatis", value=insight, height=340)
+
+    with tab_meta:
+        records = st.session_state.get("theme_records", [])
+        auto_meta = st.session_state.get("theme_meta_studies", [])
+        theme = st.session_state.get("theme_workflow_query", "")
+
+        if not records:
+            st.info("Belum ada bibliografi tema. Jalankan proses terlebih dahulu.")
+        else:
+            st.write("### Format Meta-Analysis dari Tema")
+            meta_rows = bibliographic_to_meta_theme_rows(records, theme)
+            st.download_button(
+                "📥 Download Format Meta-Analysis Sesuai Tema",
+                data=meta_rows_to_csv_auto(meta_rows),
+                file_name="format_meta_analysis_sesuai_tema.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+            st.divider()
+            st.write("### Auto-extracted Meta-Analysis")
+            if not auto_meta:
+                st.warning(
+                    "Metadata/abstrak belum memuat effect size dan SE/CI yang cukup untuk meta-analysis otomatis. "
+                    "Silakan isi file format meta-analysis dari full-text, lalu upload di tab Meta Otomatis."
+                )
+            else:
+                result = run_meta_auto(auto_meta)
+                subgroup = subgroup_meta_auto_processor(auto_meta)
+                main = result["random"]
+                h = result["heterogeneity"]
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Studi valid", result["k"])
+                c2.metric("Pooled effect", f"{main['pooled']:.4f}")
+                c3.metric("95% CI", f"{main['ci'][0]:.3f} – {main['ci'][1]:.3f}")
+                c4.metric("I²", f"{h['I2']:.1f}%")
+
+                table = []
+                for s in result["studies"]:
+                    table.append({
+                        "Study": s.get("study_id", ""),
+                        "Year": s.get("year", ""),
+                        "Effect type": s.get("effect_type", ""),
+                        "Effect": round(s.get("effect_size", 0), 4),
+                        "SE": round(s.get("standard_error", 0), 4),
+                        "95% CI": f"{s.get('lower_ci', 0):.3f} – {s.get('upper_ci', 0):.3f}",
+                        "Notes": s.get("notes", ""),
+                    })
+                st.dataframe(table, use_container_width=True, height=320)
+
+                insight = build_meta_auto_insight(result, subgroup, "Random-effects")
+                st.text_area("Insight meta-analysis otomatis", value=insight, height=340)
+
+                st.download_button(
+                    "📥 Download Hasil Meta Otomatis CSV",
+                    data=meta_auto_result_csv(result),
+                    file_name="hasil_meta_otomatis_sesuai_tema.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+    with tab_export:
+        records = st.session_state.get("theme_records", [])
+        theme = st.session_state.get("theme_workflow_query", "tema")
+        safe_theme = re.sub(r"[^A-Za-z0-9_-]+", "_", theme.strip())[:60] or "tema"
+
+        if not records:
+            st.info("Belum ada data untuk diekspor.")
+        else:
+            meta_rows = bibliographic_to_meta_theme_rows(records, theme)
+            biblio_insight = build_bibliography_theme_insight(records, theme)
+            auto_meta = st.session_state.get("theme_meta_studies", [])
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    "📥 Bibliografi CSV",
+                    data=to_csv(records),
+                    file_name=f"bibliografi_{safe_theme}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+                st.download_button(
+                    "📥 Bibliografi BibTeX",
+                    data=to_bibtex(records).encode("utf-8"),
+                    file_name=f"bibliografi_{safe_theme}.bib",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+                st.download_button(
+                    "📥 Insight Bibliografi TXT",
+                    data=biblio_insight.encode("utf-8"),
+                    file_name=f"insight_bibliografi_{safe_theme}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+
+            with col2:
+                st.download_button(
+                    "📥 Format Meta-Analysis CSV",
+                    data=meta_rows_to_csv_auto(meta_rows),
+                    file_name=f"format_meta_analysis_{safe_theme}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+                if auto_meta:
+                    result = run_meta_auto(auto_meta)
+                    insight = build_meta_auto_insight(result, subgroup_meta_auto_processor(auto_meta), "Random-effects")
+                    st.download_button(
+                        "📥 Hasil Meta Otomatis CSV",
+                        data=meta_auto_result_csv(result),
+                        file_name=f"hasil_meta_otomatis_{safe_theme}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                    )
+                    st.download_button(
+                        "📥 Insight Meta TXT",
+                        data=insight.encode("utf-8"),
+                        file_name=f"insight_meta_{safe_theme}.txt",
+                        mime="text/plain",
+                        use_container_width=True,
+                    )
+
+
 # =========================
 # Streamlit UI
 # =========================
@@ -2326,9 +2778,12 @@ with st.sidebar:
             except Exception as exc:
                 st.error(f"Sample gagal dimuat: {exc}")
 
-search_tab, upload_tab, manual_tab, data_tab, insights_tab, mapping_tab, method_tab, meta_tab, meta_auto_tab, export_tab, source_tab, guide_tab = st.tabs([
-    "🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📈 Insight", "🧭 Science Mapping", "🧪 Metodologi", "🧪 Meta-Analytic", "🧾 Meta Otomatis", "📤 Ekspor", "🌐 Sumber", "🚀 Panduan"
+theme_workflow_tab, search_tab, upload_tab, manual_tab, data_tab, insights_tab, mapping_tab, method_tab, meta_tab, meta_auto_tab, export_tab, source_tab, guide_tab = st.tabs([
+    "🔬 Tema Biblio+Meta", "🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📈 Insight", "🧭 Science Mapping", "🧪 Metodologi", "🧪 Meta-Analytic", "🧾 Meta Otomatis", "📤 Ekspor", "🌐 Sumber", "🚀 Panduan"
 ])
+
+with theme_workflow_tab:
+    render_theme_biblio_meta_tab()
 
 with search_tab:
     st.subheader("🔎 Cari Metadata Bibliografi dari Banyak Sumber")
@@ -2419,7 +2874,7 @@ with manual_tab:
             url = st.text_input("URL")
             database = st.selectbox(
                 "Database",
-                ["Manual", "Scopus", "Web of Science", "SINTA", "Google Scholar", "Crossref", "OpenAlex", "PubMed", "Semantic Scholar", "DOAJ", "arXiv", "Europe PMC", "CORE", "Lainnya"]
+                ["Manual", "Scopus", "Web of Science", "SINTA", "Google Scholar", "Crossref", "OpenAlex", "PubMed", "Semantic Scholar", "DOAJ", "arXiv", "Europe PMC", "Lainnya"]
             )
             impact = st.text_input("Impact Factor/JIF/CiteScore")
 

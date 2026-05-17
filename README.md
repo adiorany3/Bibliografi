@@ -94,3 +94,19 @@ Tab **Meta Otomatis** menambahkan alur lengkap:
    - Fisher z dari korelasi.
 4. Menghasilkan pooled effect, 95% CI, p-value, Q, tau², I², subgroup analysis, forest plot sederhana, dan insight otomatis.
 5. Mengekspor hasil meta-analysis dan laporan insight.
+
+## Workflow Tema → Bibliografi + Meta-Analisis
+
+Versi ini memperbaiki proses agar hasil bibliografi dan meta-analysis mengikuti tema yang sedang dicari.
+
+Fitur baru:
+- Tab **Tema Biblio+Meta** sebagai alur utama.
+- User memasukkan satu tema/topik.
+- Sistem memilih sumber kredibel otomatis sesuai tema.
+- Sumber yang sering error seperti CORE tidak dipakai dalam workflow otomatis.
+- Referensi difilter berdasarkan skor relevansi tema.
+- Hasil relevan otomatis dimasukkan ke dataset bibliografi.
+- Format meta-analysis dibuat otomatis dari referensi yang relevan.
+- Sistem mencoba membaca effect size dari judul/abstrak jika tersedia.
+- Jika effect size belum cukup, sistem menyediakan file ekstraksi meta-analysis untuk diisi dari full-text.
+- Insight bibliografi dan insight meta-analysis dibuat otomatis.
