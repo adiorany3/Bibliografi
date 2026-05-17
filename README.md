@@ -116,3 +116,10 @@ Ditambahkan:
 - Query variants otomatis untuk tema seperti precision livestock farming
 - Daftar sumber penting: AGRIS/FAO, USDA PubAg, CAB Abstracts, IEEE Xplore, ScienceDirect, SpringerLink, MDPI, Frontiers, Taylor & Francis, Wiley
 - Export daftar sumber relevan
+
+## Fix PLOS Source Order
+
+Perbaikan:
+- Fungsi `search_plos()` sekarang diletakkan sebelum `SOURCE_FUNCTIONS`.
+- Error `NameError: name 'search_plos' is not defined` sudah diperbaiki.
+- `app.py` sudah dicek compile.

@@ -497,6 +497,45 @@ def search_datacite(query: str, rows: int, email: str) -> List[Dict[str, str]]:
     return standardize(records)
 
 
+def search_plos(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    """Search PLOS public API. Useful for open-access empirical studies."""
+    params = {
+        "q": f'title:"{query}" OR abstract:"{query}" OR everything:"{query}"',
+        "rows": min(rows, 100),
+        "wt": "json",
+        "fl": "id,title,author,journal,publication_date,abstract,subject"
+    }
+    r = requests.get("https://api.plos.org/search", params=params, timeout=25)
+    r.raise_for_status()
+
+    records = []
+    for item in r.json().get("response", {}).get("docs", []):
+        authors = item.get("author", [])
+        if isinstance(authors, str):
+            authors = [authors]
+        abstract = item.get("abstract", "")
+        if isinstance(abstract, list):
+            abstract = " ".join(abstract)
+        subjects = item.get("subject", [])
+        if isinstance(subjects, str):
+            subjects = [subjects]
+
+        doi = item.get("id", "")
+        records.append({
+            "title": item.get("title", ""),
+            "authors": authors,
+            "year": year_from_text(item.get("publication_date", "")),
+            "journal": item.get("journal", ""),
+            "publisher": "PLOS",
+            "doi": doi.replace("doi:", ""),
+            "url": f"https://doi.org/{doi.replace('doi:', '')}" if doi else "",
+            "database": "PLOS",
+            "abstract": abstract,
+            "keywords": "; ".join(subjects[:8]),
+            "notes": "Open access PLOS API",
+        })
+    return standardize(records)
+
 SOURCE_FUNCTIONS = {
     "Crossref": search_crossref,
     "OpenAlex": search_openalex,
@@ -2999,44 +3038,6 @@ def render_qlevel_toolkit_tab():
 # =========================================================
 # Relevant Source Enhancer
 # =========================================================
-def search_plos(query: str, rows: int, email: str) -> List[Dict[str, str]]:
-    """Search PLOS public API. Useful for open-access empirical studies."""
-    params = {
-        "q": f'title:"{query}" OR abstract:"{query}" OR everything:"{query}"',
-        "rows": min(rows, 100),
-        "wt": "json",
-        "fl": "id,title,author,journal,publication_date,abstract,subject"
-    }
-    r = requests.get("https://api.plos.org/search", params=params, timeout=25)
-    r.raise_for_status()
-
-    records = []
-    for item in r.json().get("response", {}).get("docs", []):
-        authors = item.get("author", [])
-        if isinstance(authors, str):
-            authors = [authors]
-        abstract = item.get("abstract", "")
-        if isinstance(abstract, list):
-            abstract = " ".join(abstract)
-        subjects = item.get("subject", [])
-        if isinstance(subjects, str):
-            subjects = [subjects]
-
-        doi = item.get("id", "")
-        records.append({
-            "title": item.get("title", ""),
-            "authors": authors,
-            "year": year_from_text(item.get("publication_date", "")),
-            "journal": item.get("journal", ""),
-            "publisher": "PLOS",
-            "doi": doi.replace("doi:", ""),
-            "url": f"https://doi.org/{doi.replace('doi:', '')}" if doi else "",
-            "database": "PLOS",
-            "abstract": abstract,
-            "keywords": "; ".join(subjects[:8]),
-            "notes": "Open access PLOS API",
-        })
-    return standardize(records)
 
 
 def relevant_source_catalog(theme: str = "") -> List[Dict[str, str]]:
