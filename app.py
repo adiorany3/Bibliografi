@@ -537,6 +537,74 @@ def search_plos(query: str, rows: int, email: str) -> List[Dict[str, str]]:
         })
     return standardize(records)
 
+def search_openaire(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    """OpenAIRE publication search. Useful as an additional open scholarly source."""
+    params = {
+        "keywords": query,
+        "format": "json",
+        "size": min(rows, 100),
+    }
+    r = requests.get("https://api.openaire.eu/search/publications", params=params, timeout=25)
+    r.raise_for_status()
+
+    data = r.json()
+    results = data.get("response", {}).get("results", {}).get("result", [])
+    if isinstance(results, dict):
+        results = [results]
+
+    records = []
+    for item in results:
+        md = item.get("metadata", {}).get("oaf:entity", {}).get("oaf:result", {})
+        title = ""
+        titles = md.get("title", [])
+        if isinstance(titles, dict):
+            title = titles.get("$", "")
+        elif isinstance(titles, list) and titles:
+            title = titles[0].get("$", "") if isinstance(titles[0], dict) else str(titles[0])
+
+        creators = md.get("creator", [])
+        if isinstance(creators, dict):
+            creators = [creators]
+        authors = []
+        for c in creators or []:
+            if isinstance(c, dict):
+                authors.append(c.get("$", ""))
+            else:
+                authors.append(str(c))
+
+        journal = ""
+        source = md.get("journal", "")
+        if isinstance(source, dict):
+            journal = source.get("$", "")
+        elif isinstance(source, str):
+            journal = source
+
+        date = md.get("dateofacceptance", "") or md.get("dateofcollection", "")
+        doi = ""
+        pids = md.get("pid", [])
+        if isinstance(pids, dict):
+            pids = [pids]
+        for p in pids or []:
+            if isinstance(p, dict) and clean(p.get("@classid", "")).lower() == "doi":
+                doi = clean(p.get("$", ""))
+                break
+
+        records.append({
+            "title": title,
+            "authors": authors,
+            "year": year_from_text(date),
+            "journal": journal,
+            "publisher": "OpenAIRE",
+            "doi": doi,
+            "url": "",
+            "database": "OpenAIRE",
+            "abstract": "",
+            "keywords": "",
+            "notes": "OpenAIRE API",
+        })
+
+    return standardize(records)
+
 SOURCE_FUNCTIONS = {
     "Crossref": search_crossref,
     "OpenAlex": search_openalex,
@@ -550,6 +618,164 @@ SOURCE_FUNCTIONS = {
     "OpenAIRE": search_openaire,
 }
 
+
+# =========================================================
+# Enhanced Sources + Automatic Deduplication
+# =========================================================
+def normalize_doi(value: str) -> str:
+    text = clean(value).lower()
+    text = text.replace("https://doi.org/", "").replace("http://doi.org/", "").replace("doi:", "")
+    m = re.search(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", text, flags=re.I)
+    return m.group(0).rstrip(".,;) ") if m else text.strip()
+
+
+def normalize_title_for_dedup(title: str) -> str:
+    text = clean(title).lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\b(the|a|an|and|or|of|in|on|for|with|to|by|from|study|review|analysis)\b", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def first_author_key(authors: str) -> str:
+    first_author = clean(authors).split(";")[0].strip().lower()
+    first_author = re.sub(r"[^a-z0-9\s]", " ", first_author)
+    return re.sub(r"\s+", " ", first_author).strip()
+
+
+def merge_record_values(old: Dict[str, str], new: Dict[str, str]) -> Dict[str, str]:
+    merged = dict(old)
+    for col in COLUMNS:
+        ov = clean(merged.get(col, ""))
+        nv = clean(new.get(col, ""))
+
+        if col == "database":
+            vals = []
+            for val in re.split(r";|,", ov + ";" + nv):
+                val = clean(val)
+                if val and val not in vals:
+                    vals.append(val)
+            merged[col] = "; ".join(vals)
+        elif col in ["abstract", "keywords", "notes", "verification_reason"]:
+            if len(nv) > len(ov):
+                merged[col] = nv
+            elif not ov:
+                merged[col] = nv
+        elif col == "indexing_status":
+            vals = []
+            for val in re.split(r";|,", ov + ";" + nv):
+                val = clean(val)
+                if val and val not in vals:
+                    vals.append(val)
+            merged[col] = "; ".join(vals)
+        elif not ov and nv:
+            merged[col] = nv
+        elif nv and len(nv) > len(ov) and col in ["title", "journal", "publisher", "url"]:
+            merged[col] = nv
+
+    merged["indexing_status"], merged["verification_reason"] = classify(merged)
+    return {col: merged.get(col, "") for col in COLUMNS}
+
+
+def enhanced_deduplicate_records(records: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Deduplicate automatically by DOI, normalized title, and title/year/first-author similarity."""
+    cleaned = []
+    for r in records:
+        row = {col: clean(r.get(col, "")) for col in COLUMNS}
+        if not row["title"] and not row["doi"]:
+            continue
+        row["doi"] = normalize_doi(row.get("doi", ""))
+        row["indexing_status"], row["verification_reason"] = classify(row)
+        cleaned.append(row)
+
+    by_key: Dict[str, Dict[str, str]] = {}
+    no_strong_key = []
+
+    for r in cleaned:
+        doi = normalize_doi(r.get("doi", ""))
+        title_norm = normalize_title_for_dedup(r.get("title", ""))
+
+        if doi and doi.startswith("10."):
+            key = "doi:" + doi
+        elif title_norm:
+            key = "title:" + title_norm
+        else:
+            key = ""
+
+        if key:
+            if key in by_key:
+                by_key[key] = merge_record_values(by_key[key], r)
+            else:
+                by_key[key] = r
+        else:
+            no_strong_key.append(r)
+
+    result = list(by_key.values()) + no_strong_key
+
+    # Fuzzy merge for records without DOI or with slightly different titles.
+    final = []
+    import difflib
+    for r in result:
+        r_title = normalize_title_for_dedup(r.get("title", ""))
+        r_year = clean(r.get("year", ""))
+        r_author = first_author_key(r.get("authors", ""))
+        merged = False
+
+        for i, existing in enumerate(final):
+            e_title = normalize_title_for_dedup(existing.get("title", ""))
+            e_year = clean(existing.get("year", ""))
+            e_author = first_author_key(existing.get("authors", ""))
+
+            if not r_title or not e_title:
+                continue
+
+            same_year = bool(r_year and e_year and r_year == e_year)
+            same_author = bool(r_author and e_author and (r_author == e_author or r_author.split(" ")[-1:] == e_author.split(" ")[-1:]))
+            sim = difflib.SequenceMatcher(None, r_title, e_title).ratio()
+
+            if sim >= 0.94 or (sim >= 0.88 and same_year and same_author):
+                final[i] = merge_record_values(existing, r)
+                merged = True
+                break
+
+        if not merged:
+            final.append(r)
+
+    return final
+
+
+def deduplicate_session_records() -> Tuple[int, int]:
+    before = len(st.session_state.get("records", []))
+    st.session_state.records = enhanced_deduplicate_records(st.session_state.get("records", []))
+    after = len(st.session_state.records)
+
+    if st.session_state.get("theme_records"):
+        st.session_state.theme_records = enhanced_deduplicate_records(st.session_state.theme_records)
+
+    return before, after
+
+
+
+
+def search_openlibrary_noop(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    # Placeholder intentionally returns no records; kept out of active SOURCE_FUNCTIONS.
+    return []
+
+
+def render_deduplication_panel():
+    st.subheader("🧹 Deduplikasi Otomatis")
+    records = st.session_state.get("records", [])
+    theme_records = st.session_state.get("theme_records", [])
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total records", len(records))
+    c2.metric("Theme records", len(theme_records))
+    c3.metric("DOI tersedia", sum(1 for r in records if clean(r.get("doi", ""))))
+
+    st.caption("Deduplikasi otomatis memakai DOI, normalisasi judul, tahun, dan author pertama. Metadata dari duplikat akan digabung.")
+
+    if st.button("🧹 Jalankan Deduplikasi Sekarang", use_container_width=True):
+        before, after = deduplicate_session_records()
+        st.success(f"Deduplikasi selesai: {before} → {after} records. Duplikasi terhapus/tergabung: {before - after}.")
 
 # =========================================================
 # Bibliography analysis & relevance
@@ -4536,232 +4762,6 @@ def render_research_assistant_hub_inside_panduan():
                 use_container_width=True,
             )
 
-
-
-# =========================================================
-# Enhanced Sources + Automatic Deduplication
-# =========================================================
-def normalize_doi(value: str) -> str:
-    text = clean(value).lower()
-    text = text.replace("https://doi.org/", "").replace("http://doi.org/", "").replace("doi:", "")
-    m = re.search(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", text, flags=re.I)
-    return m.group(0).rstrip(".,;) ") if m else text.strip()
-
-
-def normalize_title_for_dedup(title: str) -> str:
-    text = clean(title).lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\b(the|a|an|and|or|of|in|on|for|with|to|by|from|study|review|analysis)\b", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def first_author_key(authors: str) -> str:
-    first_author = clean(authors).split(";")[0].strip().lower()
-    first_author = re.sub(r"[^a-z0-9\s]", " ", first_author)
-    return re.sub(r"\s+", " ", first_author).strip()
-
-
-def merge_record_values(old: Dict[str, str], new: Dict[str, str]) -> Dict[str, str]:
-    merged = dict(old)
-    for col in COLUMNS:
-        ov = clean(merged.get(col, ""))
-        nv = clean(new.get(col, ""))
-
-        if col == "database":
-            vals = []
-            for val in re.split(r";|,", ov + ";" + nv):
-                val = clean(val)
-                if val and val not in vals:
-                    vals.append(val)
-            merged[col] = "; ".join(vals)
-        elif col in ["abstract", "keywords", "notes", "verification_reason"]:
-            if len(nv) > len(ov):
-                merged[col] = nv
-            elif not ov:
-                merged[col] = nv
-        elif col == "indexing_status":
-            vals = []
-            for val in re.split(r";|,", ov + ";" + nv):
-                val = clean(val)
-                if val and val not in vals:
-                    vals.append(val)
-            merged[col] = "; ".join(vals)
-        elif not ov and nv:
-            merged[col] = nv
-        elif nv and len(nv) > len(ov) and col in ["title", "journal", "publisher", "url"]:
-            merged[col] = nv
-
-    merged["indexing_status"], merged["verification_reason"] = classify(merged)
-    return {col: merged.get(col, "") for col in COLUMNS}
-
-
-def enhanced_deduplicate_records(records: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Deduplicate automatically by DOI, normalized title, and title/year/first-author similarity."""
-    cleaned = []
-    for r in records:
-        row = {col: clean(r.get(col, "")) for col in COLUMNS}
-        if not row["title"] and not row["doi"]:
-            continue
-        row["doi"] = normalize_doi(row.get("doi", ""))
-        row["indexing_status"], row["verification_reason"] = classify(row)
-        cleaned.append(row)
-
-    by_key: Dict[str, Dict[str, str]] = {}
-    no_strong_key = []
-
-    for r in cleaned:
-        doi = normalize_doi(r.get("doi", ""))
-        title_norm = normalize_title_for_dedup(r.get("title", ""))
-
-        if doi and doi.startswith("10."):
-            key = "doi:" + doi
-        elif title_norm:
-            key = "title:" + title_norm
-        else:
-            key = ""
-
-        if key:
-            if key in by_key:
-                by_key[key] = merge_record_values(by_key[key], r)
-            else:
-                by_key[key] = r
-        else:
-            no_strong_key.append(r)
-
-    result = list(by_key.values()) + no_strong_key
-
-    # Fuzzy merge for records without DOI or with slightly different titles.
-    final = []
-    import difflib
-    for r in result:
-        r_title = normalize_title_for_dedup(r.get("title", ""))
-        r_year = clean(r.get("year", ""))
-        r_author = first_author_key(r.get("authors", ""))
-        merged = False
-
-        for i, existing in enumerate(final):
-            e_title = normalize_title_for_dedup(existing.get("title", ""))
-            e_year = clean(existing.get("year", ""))
-            e_author = first_author_key(existing.get("authors", ""))
-
-            if not r_title or not e_title:
-                continue
-
-            same_year = bool(r_year and e_year and r_year == e_year)
-            same_author = bool(r_author and e_author and (r_author == e_author or r_author.split(" ")[-1:] == e_author.split(" ")[-1:]))
-            sim = difflib.SequenceMatcher(None, r_title, e_title).ratio()
-
-            if sim >= 0.94 or (sim >= 0.88 and same_year and same_author):
-                final[i] = merge_record_values(existing, r)
-                merged = True
-                break
-
-        if not merged:
-            final.append(r)
-
-    return final
-
-
-def deduplicate_session_records() -> Tuple[int, int]:
-    before = len(st.session_state.get("records", []))
-    st.session_state.records = enhanced_deduplicate_records(st.session_state.get("records", []))
-    after = len(st.session_state.records)
-
-    if st.session_state.get("theme_records"):
-        st.session_state.theme_records = enhanced_deduplicate_records(st.session_state.theme_records)
-
-    return before, after
-
-
-def search_openaire(query: str, rows: int, email: str) -> List[Dict[str, str]]:
-    """OpenAIRE publication search. Useful as an additional open scholarly source."""
-    params = {
-        "keywords": query,
-        "format": "json",
-        "size": min(rows, 100),
-    }
-    r = requests.get("https://api.openaire.eu/search/publications", params=params, timeout=25)
-    r.raise_for_status()
-
-    data = r.json()
-    results = data.get("response", {}).get("results", {}).get("result", [])
-    if isinstance(results, dict):
-        results = [results]
-
-    records = []
-    for item in results:
-        md = item.get("metadata", {}).get("oaf:entity", {}).get("oaf:result", {})
-        title = ""
-        titles = md.get("title", [])
-        if isinstance(titles, dict):
-            title = titles.get("$", "")
-        elif isinstance(titles, list) and titles:
-            title = titles[0].get("$", "") if isinstance(titles[0], dict) else str(titles[0])
-
-        creators = md.get("creator", [])
-        if isinstance(creators, dict):
-            creators = [creators]
-        authors = []
-        for c in creators or []:
-            if isinstance(c, dict):
-                authors.append(c.get("$", ""))
-            else:
-                authors.append(str(c))
-
-        journal = ""
-        source = md.get("journal", "")
-        if isinstance(source, dict):
-            journal = source.get("$", "")
-        elif isinstance(source, str):
-            journal = source
-
-        date = md.get("dateofacceptance", "") or md.get("dateofcollection", "")
-        doi = ""
-        pids = md.get("pid", [])
-        if isinstance(pids, dict):
-            pids = [pids]
-        for p in pids or []:
-            if isinstance(p, dict) and clean(p.get("@classid", "")).lower() == "doi":
-                doi = clean(p.get("$", ""))
-                break
-
-        records.append({
-            "title": title,
-            "authors": authors,
-            "year": year_from_text(date),
-            "journal": journal,
-            "publisher": "OpenAIRE",
-            "doi": doi,
-            "url": "",
-            "database": "OpenAIRE",
-            "abstract": "",
-            "keywords": "",
-            "notes": "OpenAIRE API",
-        })
-
-    return standardize(records)
-
-
-def search_openlibrary_noop(query: str, rows: int, email: str) -> List[Dict[str, str]]:
-    # Placeholder intentionally returns no records; kept out of active SOURCE_FUNCTIONS.
-    return []
-
-
-def render_deduplication_panel():
-    st.subheader("🧹 Deduplikasi Otomatis")
-    records = st.session_state.get("records", [])
-    theme_records = st.session_state.get("theme_records", [])
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total records", len(records))
-    c2.metric("Theme records", len(theme_records))
-    c3.metric("DOI tersedia", sum(1 for r in records if clean(r.get("doi", ""))))
-
-    st.caption("Deduplikasi otomatis memakai DOI, normalisasi judul, tahun, dan author pertama. Metadata dari duplikat akan digabung.")
-
-    if st.button("🧹 Jalankan Deduplikasi Sekarang", use_container_width=True):
-        before, after = deduplicate_session_records()
-        st.success(f"Deduplikasi selesai: {before} → {after} records. Duplikasi terhapus/tergabung: {before - after}.")
 
 
 # =========================================================

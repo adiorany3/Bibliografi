@@ -190,3 +190,11 @@ Perbaikan:
 - Deduplikasi otomatis diperkuat menggunakan DOI, normalisasi judul, tahun, dan author pertama.
 - Metadata dari duplikat digabung, termasuk database, abstract, keyword, notes, dan indexing status.
 - Panel deduplikasi ditambahkan di tab Bibliografi.
+
+## Fix OpenAIRE Source Order
+
+Perbaikan:
+- Fungsi `search_openaire()` sekarang diletakkan sebelum `SOURCE_FUNCTIONS`.
+- Error `NameError: name 'search_openaire' is not defined` sudah diperbaiki.
+- Deduplikasi otomatis tetap aktif.
+- `app.py` sudah dicek compile.
