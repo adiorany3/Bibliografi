@@ -1722,6 +1722,422 @@ def render_final_insight_tab():
     )
 
 
+
+# =========================================================
+# Research Materials Generator
+# =========================================================
+def normalize_theme(theme: str) -> str:
+    return clean(theme).strip() or "tema penelitian"
+
+
+def top_items_as_lines(items: Dict[str, int], limit: int = 8) -> str:
+    if not items:
+        return "-"
+    return "\n".join([f"- {k}: {v}" for k, v in list(items.items())[:limit]])
+
+
+def build_search_string(theme: str) -> Dict[str, str]:
+    theme = normalize_theme(theme)
+    tokens = keyword_tokens(theme)
+    core_terms = " OR ".join([f'"{t}"' for t in tokens[:6]]) if tokens else f'"{theme}"'
+
+    # Expanded terms are generic and intentionally editable by researcher.
+    expanded = f'("{theme}" OR {core_terms})'
+    method_terms = '("bibliometric analysis" OR bibliometric* OR "systematic review" OR "meta-analysis" OR "quantitative synthesis")'
+    source_terms = '("Scopus" OR "Web of Science" OR PubMed OR Crossref OR OpenAlex OR "Semantic Scholar")'
+
+    return {
+        "basic": f'"{theme}"',
+        "bibliometric": f'{expanded} AND ("bibliometric analysis" OR bibliometric* OR "science mapping" OR "performance analysis")',
+        "meta_analysis": f'{expanded} AND ("meta-analysis" OR "effect size" OR "random effects" OR "standardized mean difference" OR "odds ratio" OR "risk ratio")',
+        "combined": f'{expanded} AND {method_terms}',
+        "database_note": f"Gunakan query inti pada database: {source_terms}. Sesuaikan syntax masing-masing database."
+    }
+
+
+def build_title_suggestions(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> List[str]:
+    theme = normalize_theme(theme).title()
+    has_meta = meta_result.get("k", 0) > 0
+    titles = [
+        f"Bibliometric and Meta-Analytic Review of {theme}",
+        f"Research Trends and Evidence Synthesis on {theme}: A Bibliometric and Meta-Analytic Study",
+        f"Mapping the Scientific Landscape of {theme}: Bibliometric Evidence and Meta-Analysis",
+        f"Performance Analysis, Science Mapping, and Evidence Synthesis of {theme}",
+    ]
+    if not has_meta:
+        titles.append(f"Bibliometric Mapping of {theme}: Trends, Knowledge Structure, and Future Research Agenda")
+    return titles
+
+
+def build_research_questions(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> List[str]:
+    theme = normalize_theme(theme)
+    questions = [
+        f"Bagaimana perkembangan publikasi terkait {theme} berdasarkan tahun, sumber, jurnal, dan database?",
+        f"Siapa penulis, jurnal, dan kata kunci dominan dalam penelitian {theme}?",
+        f"Bagaimana struktur tema dan arah perkembangan penelitian {theme} berdasarkan keyword dan metadata bibliografi?",
+        f"Seberapa kuat kualitas metadata dan kesiapan dataset untuk systematic review/meta-analysis?",
+    ]
+    if meta_result.get("k", 0):
+        questions += [
+            f"Berapa besar pooled effect dari studi empiris terkait {theme}?",
+            f"Bagaimana tingkat heterogenitas antarstudi dan apa implikasinya terhadap interpretasi hasil?",
+            f"Apakah hasil meta-analysis stabil berdasarkan sensitivity analysis dan risk of bias?"
+        ]
+    else:
+        questions += [
+            f"Studi mana yang layak masuk tahap full-text screening untuk ekstraksi effect size pada tema {theme}?",
+            f"Data kuantitatif apa yang perlu diekstraksi agar meta-analysis pada tema {theme} dapat dilakukan?"
+        ]
+    return questions
+
+
+def build_objectives(theme: str, meta_result: Dict[str, object]) -> List[str]:
+    theme = normalize_theme(theme)
+    objectives = [
+        f"Mengidentifikasi perkembangan publikasi dan sumber utama pada tema {theme}.",
+        f"Menganalisis kontribusi penulis, jurnal, database, keyword, dan pola kolaborasi pada tema {theme}.",
+        f"Menyusun peta awal literatur dan gap penelitian berdasarkan hasil bibliografi dan screening.",
+        f"Menyediakan dataset terstruktur untuk proses PRISMA, ekstraksi data, dan risk of bias.",
+    ]
+    if meta_result.get("k", 0):
+        objectives += [
+            f"Mengestimasi pooled effect dari studi empiris terkait {theme}.",
+            "Menganalisis heterogenitas, subgroup, sensitivity, publication bias, dan kualitas bukti."
+        ]
+    else:
+        objectives += [
+            "Menyiapkan format ekstraksi effect size agar meta-analysis dapat dilakukan setelah full-text review."
+        ]
+    return objectives
+
+
+def build_inclusion_exclusion(theme: str) -> Dict[str, List[str]]:
+    theme = normalize_theme(theme)
+    return {
+        "inclusion": [
+            f"Artikel membahas tema utama {theme}.",
+            "Artikel berupa research article, conference paper empiris, atau studi kuantitatif yang relevan.",
+            "Metadata minimal memuat judul, tahun, sumber/jurnal, dan penulis.",
+            "Untuk meta-analysis: artikel menyediakan effect size/SE, confidence interval, mean-SD-n, event-total, odds ratio, risk ratio, korelasi, atau data yang bisa dihitung menjadi effect size.",
+            "Artikel berada pada rentang tahun yang ditentukan peneliti.",
+        ],
+        "exclusion": [
+            "Artikel tidak sesuai tema setelah screening judul/abstrak.",
+            "Duplikasi berdasarkan DOI, judul, atau metadata lain.",
+            "Editorial, letter, opinion, komentar, atau artikel konseptual tanpa data empiris jika tujuan meta-analysis.",
+            "Artikel tanpa full-text atau tanpa data kuantitatif yang dapat diekstraksi untuk meta-analysis.",
+            "Studi dengan outcome, populasi, atau metode yang tidak sebanding dengan fokus penelitian.",
+        ]
+    }
+
+
+def build_extraction_protocol(theme: str) -> List[str]:
+    theme = normalize_theme(theme)
+    return [
+        "Identitas studi: study_id, penulis, tahun, judul, jurnal, DOI, database.",
+        "Konteks studi: negara/lokasi, populasi, sektor/objek, desain penelitian.",
+        f"Kesesuaian tema: hubungan studi dengan {theme}.",
+        "Outcome utama: variabel hasil yang dianalisis.",
+        "Intervensi/eksposur/teknologi/variabel independen.",
+        "Comparison/control group jika ada.",
+        "Data effect size: effect_size dan standard_error jika sudah tersedia.",
+        "Data SMD: n_t, mean_t, sd_t, n_c, mean_c, sd_c.",
+        "Data rasio: event_t, total_t, event_c, total_c atau event/non-event.",
+        "Data korelasi: r dan n.",
+        "Risk of bias: randomization, blinding, incomplete data, selective reporting, confounding control, sample size.",
+        "Catatan keputusan: included, excluded, maybe, dan alasan screening."
+    ]
+
+
+def build_gap_and_novelty(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> Dict[str, List[str]]:
+    theme = normalize_theme(theme)
+    m = get_metrics(records) if records else {"with_abstract": 0, "with_doi": 0, "need": 0}
+    total = len(records)
+
+    gaps = [
+        f"Literatur {theme} tersebar di berbagai sumber sehingga memerlukan pemetaan bibliografi yang terstruktur.",
+        "Sebagian metadata belum lengkap, terutama DOI, abstrak, keyword, atau indikator indeksasi.",
+        "Tidak semua studi bibliografi menyediakan data kuantitatif yang siap digunakan untuk meta-analysis.",
+        "Perbedaan outcome, populasi, metode, dan desain studi berpotensi menimbulkan heterogenitas.",
+    ]
+
+    if total and pct(m["with_abstract"], total) < 60:
+        gaps.append("Keterbatasan abstrak mengurangi akurasi screening otomatis dan pemetaan tema.")
+    if meta_result.get("k", 0) == 0:
+        gaps.append("Belum ada cukup effect size/SE yang dapat dihitung otomatis dari metadata, sehingga full-text extraction menjadi kebutuhan utama.")
+    elif meta_result.get("heterogeneity", {}).get("I2", 0) >= 60:
+        gaps.append("Heterogenitas tinggi menunjukkan perlunya subgroup analysis dan klasifikasi studi yang lebih rinci.")
+
+    novelty = [
+        f"Penelitian ini menggabungkan bibliometric mapping dan kesiapan meta-analysis pada tema {theme}.",
+        "Dataset disusun dengan alur PRISMA, screening otomatis, risk of bias, dan format ekstraksi effect size.",
+        "Studi tidak hanya memetakan tren publikasi, tetapi juga menilai kesiapan bukti empiris untuk sintesis kuantitatif.",
+        "Output penelitian menghasilkan insight bibliografi, gap penelitian, dan bahan sistematis untuk meta-analysis."
+    ]
+
+    return {"gaps": gaps, "novelty": novelty}
+
+
+def build_discussion_points(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> List[str]:
+    theme = normalize_theme(theme)
+    dbs = count_by(records, "database", 5) if records else {}
+    journals = count_by(records, "journal", 5) if records else {}
+    keywords = keyword_distribution(records, 8) if records else {}
+
+    points = [
+        f"Perkembangan penelitian {theme} dapat dibahas dari jumlah publikasi, periode publikasi, dan sebaran sumber data.",
+        "Dominasi database tertentu perlu dibahas karena dapat memengaruhi cakupan literatur dan potensi bias sumber.",
+        "Jurnal dominan dapat digunakan untuk menunjukkan pusat publikasi dan bidang keilmuan utama.",
+        "Keyword dominan dapat digunakan untuk menjelaskan klaster topik, arah riset, dan tema yang muncul.",
+        "Kualitas metadata perlu dibahas karena memengaruhi deduplikasi, screening, dan ekstraksi data.",
+    ]
+
+    if dbs:
+        points.append("Sumber data dominan: " + "; ".join([f"{k} ({v})" for k, v in dbs.items()]) + ".")
+    if journals:
+        points.append("Jurnal dominan: " + "; ".join([f"{k} ({v})" for k, v in journals.items()]) + ".")
+    if keywords:
+        points.append("Keyword penting: " + "; ".join([f"{k} ({v})" for k, v in keywords.items()]) + ".")
+
+    if meta_result.get("k", 0):
+        h = meta_result.get("heterogeneity", {})
+        points.append(f"Hasil meta-analysis perlu dibahas melalui pooled effect, confidence interval, p-value, dan I² sebesar {h.get('I2', 0):.2f}%.")
+        if h.get("I2", 0) >= 60:
+            points.append("Heterogenitas tinggi dapat dijelaskan melalui perbedaan populasi, outcome, metode pengukuran, atau desain studi.")
+    else:
+        points.append("Jika meta-analysis belum menghasilkan pooled effect, pembahasan harus menekankan kebutuhan full-text extraction untuk effect size dan standard error.")
+
+    return points
+
+
+def build_limitations(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> List[str]:
+    limitations = [
+        "Validasi indeks Scopus/WoS/high impact masih perlu dilakukan manual karena aplikasi hanya membaca indikator metadata.",
+        "Metadata dari database publik dapat tidak lengkap atau berbeda format antar sumber.",
+        "Screening otomatis berbasis kata kunci tidak menggantikan keputusan peneliti saat membaca full-text.",
+        "Risk of bias perlu dinilai manual berdasarkan isi artikel, bukan hanya metadata.",
+        "Hasil meta-analysis otomatis harus divalidasi ulang dengan software statistik khusus sebelum publikasi ilmiah."
+    ]
+    if not meta_result.get("k", 0):
+        limitations.append("Meta-analysis belum dapat disimpulkan apabila effect size/SE belum diekstraksi dari full-text.")
+    return limitations
+
+
+def build_conclusion_draft(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> str:
+    theme = normalize_theme(theme)
+    m = get_metrics(records) if records else None
+    if not records:
+        return f"Penelitian bertema {theme} belum memiliki dataset bibliografi yang cukup untuk disimpulkan."
+
+    base = (
+        f"Berdasarkan hasil pemetaan bibliografi, tema {theme} menunjukkan cakupan literatur yang dapat dianalisis "
+        f"melalui distribusi publikasi, sumber data, jurnal dominan, penulis, keyword, dan kualitas metadata. "
+    )
+
+    if m:
+        base += (
+            f"Dataset yang diperoleh memuat {len(records)} referensi relevan, dengan {m['with_doi']} referensi memiliki DOI "
+            f"dan {m['with_abstract']} referensi memiliki abstrak. "
+        )
+
+    if meta_result.get("k", 0):
+        main = meta_result["random"]
+        h = meta_result["heterogeneity"]
+        base += (
+            f"Hasil meta-analysis awal terhadap {meta_result['k']} studi menunjukkan pooled effect sebesar {main['pooled']:.4f} "
+            f"dengan 95% CI {main['ci'][0]:.4f} sampai {main['ci'][1]:.4f}, serta I² sebesar {h['I2']:.2f}%. "
+            f"Temuan ini perlu ditafsirkan dengan mempertimbangkan heterogenitas, risk of bias, dan hasil sensitivity analysis."
+        )
+    else:
+        base += (
+            "Namun, meta-analysis belum dapat disimpulkan secara kuantitatif karena data effect size dan standard error "
+            "masih perlu diekstraksi dari full-text artikel."
+        )
+
+    return base
+
+
+def build_research_materials_report(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> str:
+    theme = normalize_theme(theme)
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    searches = build_search_string(theme)
+    inc_exc = build_inclusion_exclusion(theme)
+    gap_novelty = build_gap_and_novelty(theme, records, meta_result)
+
+    lines = [
+        "BAHAN PENELITIAN OTOMATIS",
+        "",
+        f"Tema: {theme}",
+        "",
+        "1. Alternatif Judul",
+    ]
+    lines += [f"- {x}" for x in build_title_suggestions(theme, records, meta_result)]
+
+    lines += ["", "2. Rumusan Masalah"]
+    lines += [f"- {x}" for x in build_research_questions(theme, records, meta_result)]
+
+    lines += ["", "3. Tujuan Penelitian"]
+    lines += [f"- {x}" for x in build_objectives(theme, meta_result)]
+
+    lines += ["", "4. Search String"]
+    for k, v in searches.items():
+        lines.append(f"- {k}: {v}")
+
+    lines += ["", "5. Kriteria Inklusi"]
+    lines += [f"- {x}" for x in inc_exc["inclusion"]]
+
+    lines += ["", "6. Kriteria Eksklusi"]
+    lines += [f"- {x}" for x in inc_exc["exclusion"]]
+
+    lines += ["", "7. Protokol Ekstraksi Data"]
+    lines += [f"- {x}" for x in build_extraction_protocol(theme)]
+
+    lines += ["", "8. Gap Penelitian"]
+    lines += [f"- {x}" for x in gap_novelty["gaps"]]
+
+    lines += ["", "9. Novelty/Kebaruan"]
+    lines += [f"- {x}" for x in gap_novelty["novelty"]]
+
+    lines += ["", "10. Poin Pembahasan"]
+    lines += [f"- {x}" for x in build_discussion_points(theme, records, meta_result)]
+
+    lines += ["", "11. Keterbatasan Penelitian"]
+    lines += [f"- {x}" for x in build_limitations(theme, records, meta_result)]
+
+    lines += ["", "12. Draft Kesimpulan"]
+    lines.append(build_conclusion_draft(theme, records, meta_result))
+
+    lines += ["", "13. Insight Akhir"]
+    lines.append(build_executive_insight(theme, records, screened, meta_studies, rob_rows))
+
+    return "\n".join(lines)
+
+
+def render_research_materials_tab():
+    st.subheader("🧩 Bahan Penelitian")
+    records = st.session_state.theme_records or st.session_state.records
+    screened = st.session_state.screened
+    meta_studies = st.session_state.meta_studies
+    rob_rows = st.session_state.rob_rows
+    theme = st.session_state.last_theme or st.text_input("Tema manual untuk bahan penelitian", value="precision livestock farming")
+
+    if not records:
+        st.info("Belum ada dataset. Jalankan Workflow Tema terlebih dahulu agar bahan penelitian mengikuti hasil yang didapat.")
+        # Still show general template based on manual theme
+        meta_result = {"k": 0, "studies": []}
+        st.write("### Template awal berdasarkan tema")
+    else:
+        meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+
+    sections = st.multiselect(
+        "Pilih bahan yang ingin ditampilkan",
+        [
+            "Alternatif Judul",
+            "Rumusan Masalah",
+            "Tujuan Penelitian",
+            "Search String",
+            "Inklusi-Eksklusi",
+            "Protokol Ekstraksi",
+            "Gap & Novelty",
+            "Poin Pembahasan",
+            "Keterbatasan",
+            "Draft Kesimpulan",
+            "Insight Lengkap"
+        ],
+        default=[
+            "Alternatif Judul",
+            "Rumusan Masalah",
+            "Tujuan Penelitian",
+            "Search String",
+            "Inklusi-Eksklusi",
+            "Gap & Novelty",
+            "Draft Kesimpulan",
+            "Insight Lengkap"
+        ]
+    )
+
+    if "Alternatif Judul" in sections:
+        st.write("### Alternatif Judul")
+        for x in build_title_suggestions(theme, records, meta_result):
+            st.write(f"- {x}")
+
+    if "Rumusan Masalah" in sections:
+        st.write("### Rumusan Masalah")
+        for x in build_research_questions(theme, records, meta_result):
+            st.write(f"- {x}")
+
+    if "Tujuan Penelitian" in sections:
+        st.write("### Tujuan Penelitian")
+        for x in build_objectives(theme, meta_result):
+            st.write(f"- {x}")
+
+    if "Search String" in sections:
+        st.write("### Search String")
+        st.json(build_search_string(theme))
+
+    if "Inklusi-Eksklusi" in sections:
+        st.write("### Kriteria Inklusi-Eksklusi")
+        inc_exc = build_inclusion_exclusion(theme)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.write("**Inklusi**")
+            for x in inc_exc["inclusion"]:
+                st.write(f"- {x}")
+        with c2:
+            st.write("**Eksklusi**")
+            for x in inc_exc["exclusion"]:
+                st.write(f"- {x}")
+
+    if "Protokol Ekstraksi" in sections:
+        st.write("### Protokol Ekstraksi")
+        for x in build_extraction_protocol(theme):
+            st.write(f"- {x}")
+
+    if "Gap & Novelty" in sections:
+        st.write("### Gap & Novelty")
+        gn = build_gap_and_novelty(theme, records, meta_result)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.write("**Gap**")
+            for x in gn["gaps"]:
+                st.write(f"- {x}")
+        with c2:
+            st.write("**Novelty**")
+            for x in gn["novelty"]:
+                st.write(f"- {x}")
+
+    if "Poin Pembahasan" in sections:
+        st.write("### Poin Pembahasan")
+        for x in build_discussion_points(theme, records, meta_result):
+            st.write(f"- {x}")
+
+    if "Keterbatasan" in sections:
+        st.write("### Keterbatasan")
+        for x in build_limitations(theme, records, meta_result):
+            st.write(f"- {x}")
+
+    if "Draft Kesimpulan" in sections:
+        st.write("### Draft Kesimpulan")
+        st.write(build_conclusion_draft(theme, records, meta_result))
+
+    if "Insight Lengkap" in sections:
+        st.write("### Insight Lengkap")
+        st.text_area(
+            "Bahan penelitian lengkap",
+            value=build_research_materials_report(theme, records, screened, meta_studies, rob_rows),
+            height=520
+        )
+
+    report = build_research_materials_report(theme, records, screened, meta_studies, rob_rows)
+    st.download_button(
+        "📥 Download Bahan Penelitian TXT",
+        data=report.encode("utf-8"),
+        file_name="bahan_penelitian_biblio_meta.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
+
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -1761,6 +2177,7 @@ tabs = st.tabs([
     "⚖️ Risk of Bias",
     "📉 Sensitivity & Bias",
     "📌 Insight Akhir",
+    "🧩 Bahan Penelitian",
     "📤 Export",
     "📖 Panduan"
 ])
@@ -2113,6 +2530,9 @@ with tabs[6]:
     render_final_insight_tab()
 
 with tabs[7]:
+    render_research_materials_tab()
+
+with tabs[8]:
     st.subheader("📤 Export")
     records = st.session_state.theme_records or st.session_state.records
     screened = st.session_state.screened
@@ -2140,10 +2560,12 @@ with tabs[7]:
         )
         st.download_button("📥 Laporan Bibliografi TXT", data=build_biblio_report(records, st.session_state.last_theme).encode("utf-8"), file_name="laporan_bibliografi.txt", mime="text/plain", use_container_width=True, disabled=not bool(records))
         executive_insight = build_executive_insight(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
+        research_materials = build_research_materials_report(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Laporan Akhir TXT", data=final_summary.encode("utf-8"), file_name="laporan_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
         st.download_button("📥 Insight Akhir TXT", data=executive_insight.encode("utf-8"), file_name="insight_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
+        st.download_button("📥 Bahan Penelitian TXT", data=research_materials.encode("utf-8"), file_name="bahan_penelitian_biblio_meta.txt", mime="text/plain", use_container_width=True)
 
-with tabs[8]:
+with tabs[9]:
     st.subheader("📖 Panduan")
     st.markdown("""
 ### Alur yang disarankan
@@ -2157,7 +2579,8 @@ with tabs[8]:
 8. Upload kembali file tersebut ke tab **Meta-Analysis**.
 9. Isi **Risk of Bias**.
 10. Cek **Sensitivity & Bias**.
-11. Export laporan dari tab **Export**.
+11. Buka **Bahan Penelitian** untuk mengambil judul, rumusan masalah, gap, novelty, pembahasan, dan kesimpulan.
+12. Export laporan dari tab **Export**.
 
 ### Sumber kredibel
 - Crossref

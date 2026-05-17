@@ -60,3 +60,19 @@ Perbaikan:
 - Menambahkan `import zipfile` ke `app.py`.
 - Error `NameError: name 'zipfile' is not defined` sudah diperbaiki.
 - Export/import Excel `.xlsx` tetap berjalan tanpa dependency tambahan.
+
+## Bahan Penelitian
+
+Ditambahkan tab **Bahan Penelitian** yang menghasilkan:
+- Alternatif judul
+- Rumusan masalah
+- Tujuan penelitian
+- Search string
+- Kriteria inklusi-eksklusi
+- Protokol ekstraksi data
+- Gap penelitian
+- Novelty/kebaruan
+- Poin pembahasan
+- Keterbatasan
+- Draft kesimpulan
+- Insight lengkap siap laporan
