@@ -4764,6 +4764,398 @@ def render_research_assistant_hub_inside_panduan():
 
 
 
+
+# =========================================================
+# Quality Control & Validity Guard
+# =========================================================
+def build_quality_control_strategy(theme: str) -> str:
+    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    return f"""QUALITY CONTROL & VALIDITY GUARD
+
+Tema:
+{theme}
+
+Tujuan modul ini adalah memperketat kendali mutu agar systematic review dan meta-analisis lebih komprehensif, valid, transparan, dan dapat dipertanggungjawabkan.
+
+1. Perluas dan Pertajam Search Strategy
+
+Prinsip:
+- Jangan hanya memakai satu database.
+- Kombinasikan database multidisipliner, database domain, dan grey literature.
+- Gunakan sinonim, istilah teknis, istilah domain, operator Boolean, dan controlled vocabulary seperti MeSH jika relevan.
+- Catat search string dan jumlah hasil dari setiap database.
+
+Database utama:
+- Scopus
+- Web of Science
+- PubMed
+- Cochrane Library
+- Crossref
+- OpenAlex
+- Semantic Scholar
+- PLOS
+- DOAJ
+- Europe PMC
+- DataCite
+- OpenAIRE
+
+Database domain/pendukung:
+- CAB Abstracts/CABI
+- AGRIS/FAO
+- USDA PubAg
+- IEEE Xplore
+- ScienceDirect
+- SpringerLink
+- Wiley
+- Taylor & Francis
+- MDPI
+- Frontiers
+- Dimensions
+
+Grey literature:
+- Google Scholar
+- ProQuest Dissertations
+- tesis/disertasi
+- prosiding konferensi
+- laporan pemerintah
+- preprint
+- policy report
+- technical report
+
+Contoh search string untuk precision livestock farming:
+("precision livestock farming" OR "smart livestock farming" OR "precision dairy farming" OR "livestock monitoring" OR "animal welfare monitoring" OR "animal health monitoring") AND (sensor* OR IoT OR "machine learning" OR "artificial intelligence" OR "computer vision" OR wearable OR "automated monitoring")
+
+2. Double-Blinded Screening
+
+Prinsip:
+- Screening judul/abstrak dilakukan minimal oleh dua reviewer secara independen.
+- Reviewer tidak melihat keputusan reviewer lain saat tahap awal.
+- Perbedaan keputusan dicatat sebagai discrepancy.
+- Discrepancy diselesaikan melalui diskusi atau reviewer ketiga.
+- Laporkan proses ini dalam metode.
+
+Kategori keputusan:
+- Include
+- Exclude
+- Maybe
+- Conflict/Discrepancy
+
+Alasan eksklusi harus spesifik:
+- tidak sesuai tema
+- bukan studi empiris
+- tidak ada outcome
+- tidak tersedia full-text
+- duplikasi
+- tidak ada data kuantitatif
+- populasi/outcome tidak sesuai
+- desain studi tidak sesuai
+
+3. Risk of Bias dan Quality Assessment
+
+Prinsip:
+- Kualitas studi menentukan kekuatan kesimpulan.
+- Studi high risk of bias jangan langsung dicampur tanpa analisis tambahan.
+- Gunakan alat yang sesuai dengan desain studi.
+
+Alat yang disarankan:
+- Cochrane Risk of Bias 2 untuk RCT.
+- ROBINS-I untuk non-randomized intervention studies.
+- Newcastle-Ottawa Scale untuk studi observasional.
+- QUADAS-2 untuk diagnostic accuracy studies.
+- JBI Critical Appraisal Tools untuk desain campuran.
+- AMSTAR-2 untuk menilai systematic review lain.
+
+Penggunaan hasil ROB:
+- Masukkan sebagai tabel.
+- Gunakan untuk interpretasi strength of evidence.
+- Jalankan sensitivity analysis dengan mengecualikan studi high risk.
+- Jika high risk dominan, turunkan kekuatan kesimpulan.
+
+4. Sensitivity Analysis
+
+Tujuan:
+Menguji apakah hasil meta-analisis tetap stabil jika studi tertentu dikeluarkan.
+
+Metode:
+- Leave-one-out analysis.
+- Exclude high risk of bias studies.
+- Exclude outlier studies.
+- Exclude very large studies yang mendominasi bobot.
+- Bandingkan fixed-effect dan random-effects.
+- Bandingkan hasil berdasarkan jenis effect size atau outcome.
+
+Interpretasi:
+- Jika pooled effect tetap konsisten, hasil robust.
+- Jika hasil berubah drastis, kesimpulan harus hati-hati.
+- Jelaskan studi mana yang paling memengaruhi hasil.
+
+5. Kendali Heterogenitas
+
+Gunakan statistik:
+- Q
+- tau²
+- I²
+
+Interpretasi I²:
+- <30%: heterogenitas rendah.
+- 30–60%: heterogenitas sedang.
+- >60%: heterogenitas tinggi.
+- >75%: sangat tinggi dan perlu eksplorasi serius.
+
+Jika I² tinggi:
+- Jangan memaksakan kesimpulan global terlalu kuat.
+- Lakukan subgroup analysis.
+- Pertimbangkan meta-regression jika jumlah studi cukup.
+- Cek perbedaan populasi, intervensi, outcome, wilayah, desain studi, teknologi, dosis, durasi, atau metode pengukuran.
+- Bahas heterogenitas sebagai temuan penting.
+
+Contoh subgroup untuk precision livestock farming:
+- jenis ternak: dairy cattle, beef cattle, poultry, sheep/goat.
+- teknologi: sensor wearable, computer vision, IoT, machine learning.
+- outcome: animal welfare, disease detection, productivity, milk yield, feed efficiency.
+- wilayah: Asia, Europe, Americas, Africa.
+- desain: experimental, observational, validation study.
+
+6. Publication Bias
+
+Strategi:
+- Gunakan funnel plot jika jumlah studi cukup.
+- Gunakan Egger test jika jumlah studi memadai.
+- Cari grey literature untuk mengurangi bias publikasi.
+- Jelaskan jika publication bias tidak dapat diuji karena studi terlalu sedikit.
+- Jangan menyimpulkan “tidak ada publication bias” jika jumlah studi kecil.
+
+7. Audit Trail
+
+Simpan:
+- search string per database.
+- tanggal pencarian.
+- jumlah hasil awal.
+- jumlah duplikasi.
+- alasan eksklusi.
+- keputusan reviewer 1 dan reviewer 2.
+- discrepancy dan resolusi.
+- data ekstraksi.
+- risk of bias.
+- versi dataset.
+- catatan perubahan analisis.
+
+8. Standar Q-Level
+
+Agar lebih siap jurnal Q-level:
+- gunakan PRISMA sebagai backbone.
+- tampilkan flow diagram/count.
+- lampirkan search string lengkap.
+- gunakan multidatabase.
+- sertakan grey literature bila relevan.
+- gunakan double screening.
+- gunakan risk-of-bias tool standar.
+- laporkan sensitivity analysis.
+- kontrol heterogenitas.
+- hindari klaim berlebihan.
+- sediakan supplementary material.
+"""
+
+
+def build_screening_reviewer_template(records: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    rows = []
+    source_records = records[:200] if records else []
+    if not source_records:
+        source_records = [{
+            "title": "Example title",
+            "authors": "Author A",
+            "year": "2024",
+            "journal": "Journal",
+            "doi": "",
+            "database": "Manual",
+            "abstract": "Example abstract"
+        }]
+    for i, r in enumerate(source_records, 1):
+        rows.append({
+            "record_id": str(i),
+            "title": r.get("title", ""),
+            "authors": r.get("authors", ""),
+            "year": r.get("year", ""),
+            "journal": r.get("journal", ""),
+            "doi": r.get("doi", ""),
+            "database": r.get("database", ""),
+            "reviewer_1_decision": "",
+            "reviewer_1_reason": "",
+            "reviewer_2_decision": "",
+            "reviewer_2_reason": "",
+            "discrepancy": "",
+            "final_decision": "",
+            "final_reason": "",
+            "third_reviewer_notes": "",
+        })
+    return rows
+
+
+def build_rob_tool_selector(theme: str) -> List[Dict[str, str]]:
+    return [
+        {"study_design": "Randomized controlled trial / RCT", "recommended_tool": "Cochrane Risk of Bias 2", "use_when": "Intervention assigned randomly", "qlevel_note": "Laporkan domain ROB2 dan overall judgment."},
+        {"study_design": "Non-randomized intervention", "recommended_tool": "ROBINS-I", "use_when": "Intervention/exposure not randomized", "qlevel_note": "Sangat penting untuk confounding."},
+        {"study_design": "Observational cohort/case-control", "recommended_tool": "Newcastle-Ottawa Scale / NOS", "use_when": "Exposure-outcome observational studies", "qlevel_note": "Laporkan selection, comparability, outcome/exposure."},
+        {"study_design": "Diagnostic/accuracy study", "recommended_tool": "QUADAS-2", "use_when": "Detection/prediction accuracy studies", "qlevel_note": "Cocok untuk computer vision/disease detection."},
+        {"study_design": "Cross-sectional/survey", "recommended_tool": "JBI Critical Appraisal Checklist", "use_when": "Survey/prevalence/association studies", "qlevel_note": "Jelaskan sampling and measurement bias."},
+        {"study_design": "Systematic review included as evidence", "recommended_tool": "AMSTAR-2", "use_when": "Umbrella review or review of reviews", "qlevel_note": "Gunakan bila menilai review lain."},
+    ]
+
+
+def build_heterogeneity_action_plan(meta_studies: List[Dict[str, object]]) -> List[Dict[str, str]]:
+    if meta_studies:
+        result = run_meta(meta_studies)
+        i2 = result.get("heterogeneity", {}).get("I2", 0) if result.get("k", 0) else 0
+    else:
+        i2 = 0
+
+    if not meta_studies:
+        status = "Belum tersedia"
+        action = "Isi effect size/SE dari full-text terlebih dahulu."
+    elif i2 < 30:
+        status = "Rendah"
+        action = "Random-effects tetap dapat dilaporkan, tetapi heterogenitas bukan masalah utama."
+    elif i2 < 60:
+        status = "Sedang"
+        action = "Bahas kemungkinan variasi metode, populasi, outcome, dan lakukan subgroup jika memungkinkan."
+    else:
+        status = "Tinggi"
+        action = "Jangan memaksakan kesimpulan global. Lakukan subgroup/sensitivity dan jelaskan sumber heterogenitas."
+
+    return [
+        {"indicator": "I²", "current_status": status, "recommended_action": action},
+        {"indicator": "Subgroup by population/species", "current_status": "Disarankan", "recommended_action": "Pisahkan analisis berdasarkan jenis populasi/spesies jika relevan."},
+        {"indicator": "Subgroup by intervention/technology", "current_status": "Disarankan", "recommended_action": "Pisahkan berdasarkan teknologi/intervensi/metode."},
+        {"indicator": "Subgroup by outcome", "current_status": "Disarankan", "recommended_action": "Jangan gabungkan outcome yang terlalu berbeda."},
+        {"indicator": "Sensitivity high risk exclusion", "current_status": "Disarankan", "recommended_action": "Ulangi analisis setelah mengeluarkan studi high risk."},
+        {"indicator": "Meta-regression", "current_status": "Opsional", "recommended_action": "Pertimbangkan jika jumlah studi cukup dan moderator tersedia."},
+    ]
+
+
+def build_qc_checklist(records, screened, meta_studies, rob_rows) -> List[Dict[str, str]]:
+    total = len(records)
+    m = get_metrics(records) if records else {"with_doi": 0, "with_abstract": 0}
+    items = []
+
+    def status(condition):
+        return "OK" if condition else "Perlu diperbaiki"
+
+    items.append({"area": "Multidatabase search", "criterion": "Menggunakan lebih dari satu database utama dan sumber domain.", "status": status(total >= 30), "action": "Tambahkan Scopus/WoS/PubMed/CAB/AGRIS/IEEE/ScienceDirect bila relevan."})
+    items.append({"area": "Search string", "criterion": "Memakai sinonim, Boolean, dan istilah domain/MeSH bila relevan.", "status": "Perlu dicek manual", "action": "Simpan search string per database sebagai supplementary material."})
+    items.append({"area": "Grey literature", "criterion": "Mempertimbangkan tesis, disertasi, prosiding, laporan, preprint.", "status": "Perlu dicek manual", "action": "Tambahkan grey literature untuk mengurangi publication bias."})
+    items.append({"area": "DOI coverage", "criterion": "DOI coverage minimal 70%.", "status": status(total > 0 and pct(m.get("with_doi", 0), total) >= 70), "action": "Lengkapi DOI melalui Crossref/OpenAlex/full-text."})
+    items.append({"area": "Abstract coverage", "criterion": "Abstract coverage minimal 60%.", "status": status(total > 0 and pct(m.get("with_abstract", 0), total) >= 60), "action": "Lengkapi abstrak untuk screening dan narrative synthesis."})
+    items.append({"area": "Double screening", "criterion": "Reviewer 1 dan Reviewer 2 melakukan screening independen.", "status": "Perlu dicek manual", "action": "Gunakan template double screening."})
+    items.append({"area": "PRISMA", "criterion": "Ada included/excluded/maybe dan alasan eksklusi.", "status": status(bool(screened)), "action": "Jalankan PRISMA & Screening."})
+    items.append({"area": "Risk of Bias", "criterion": "ROB dinilai dengan tool sesuai desain studi.", "status": status(bool(rob_rows)), "action": "Isi ROB berdasarkan full-text."})
+    items.append({"area": "Sensitivity analysis", "criterion": "Leave-one-out dan/atau exclude high risk tersedia.", "status": status(len(meta_studies) >= 2), "action": "Butuh minimal 2 studi valid."})
+    items.append({"area": "Publication bias", "criterion": "Funnel/Egger atau limitation statement.", "status": status(len(meta_studies) >= 3), "action": "Jika studi sedikit, jelaskan tidak cukup untuk diuji."})
+    items.append({"area": "Heterogeneity control", "criterion": "I² ditafsirkan dan subgroup/sensitivity dilakukan bila tinggi.", "status": status(len(meta_studies) >= 2), "action": "Gunakan action plan heterogenitas."})
+    return items
+
+
+def build_quality_control_report(theme, records, screened, meta_studies, rob_rows) -> str:
+    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    lines = [
+        "QUALITY CONTROL & VALIDITY REPORT",
+        "",
+        f"Theme: {theme}",
+        "",
+        "1. Strategy",
+        build_quality_control_strategy(theme),
+        "",
+        "2. QC Checklist"
+    ]
+    for row in build_qc_checklist(records, screened, meta_studies, rob_rows):
+        lines.append(f"- [{row['status']}] {row['area']}: {row['criterion']} Action: {row['action']}")
+
+    lines += ["", "3. Risk of Bias Tool Selector"]
+    for row in build_rob_tool_selector(theme):
+        lines.append(f"- {row['study_design']}: {row['recommended_tool']} | Use: {row['use_when']} | Note: {row['qlevel_note']}")
+
+    lines += ["", "4. Heterogeneity Action Plan"]
+    for row in build_heterogeneity_action_plan(meta_studies):
+        lines.append(f"- {row['indicator']}: {row['current_status']} | Action: {row['recommended_action']}")
+
+    lines += ["", "5. Practical Recommendation"]
+    if len(records) < 30:
+        lines.append("- Perluas search strategy dan database sebelum submit ke jurnal Q-level.")
+    if not screened:
+        lines.append("- Jalankan double screening dan PRISMA.")
+    if not rob_rows:
+        lines.append("- Lengkapi risk of bias sebelum menulis kesimpulan kuat.")
+    if len(meta_studies) < 3:
+        lines.append("- Meta-analysis belum cukup kuat untuk publication bias. Gunakan narrative synthesis atau sebut eksploratif.")
+    if len(records) >= 30 and screened and rob_rows:
+        lines.append("- Workflow sudah cukup kuat; lanjutkan validasi manual, polishing draft, dan target journal fit.")
+
+    return "\n".join(lines)
+
+
+def render_quality_control_inside_panduan():
+    st.divider()
+    st.subheader("🛡️ Quality Control & Validity Guard")
+    st.caption("Memperketat mutu metodologi: multidatabase search, double screening, risk of bias, sensitivity analysis, heterogeneity control, dan publication bias.")
+
+    records = st.session_state.get("theme_records", []) or st.session_state.get("records", [])
+    screened = st.session_state.get("screened", [])
+    meta_studies = st.session_state.get("meta_studies", [])
+    rob_rows = st.session_state.get("rob_rows", [])
+    theme = st.session_state.get("last_theme", "") or "precision livestock farming"
+
+    tab_strategy, tab_screen, tab_rob, tab_hetero, tab_export = st.tabs([
+        "🔎 Search Strategy", "👥 Double Screening", "⚖️ ROB Tools", "📊 Heterogenitas", "📤 Export"
+    ])
+
+    with tab_strategy:
+        st.text_area("Strategi kendali mutu", value=build_quality_control_strategy(theme), height=520)
+        st.write("### QC Checklist")
+        st.dataframe(build_qc_checklist(records, screened, meta_studies, rob_rows), use_container_width=True, height=360)
+
+    with tab_screen:
+        st.write("### Template Double-Blinded Screening")
+        screen_rows = build_screening_reviewer_template(records)
+        st.dataframe(screen_rows, use_container_width=True, height=360)
+        if "rows_to_xlsx" in globals():
+            st.download_button(
+                "📥 Download Template Double Screening Excel",
+                data=rows_to_xlsx(screen_rows, ["record_id", "title", "authors", "year", "journal", "doi", "database", "reviewer_1_decision", "reviewer_1_reason", "reviewer_2_decision", "reviewer_2_reason", "discrepancy", "final_decision", "final_reason", "third_reviewer_notes"], "Double Screening"),
+                file_name="template_double_screening.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+    with tab_rob:
+        st.write("### Risk of Bias Tool Selector")
+        st.dataframe(build_rob_tool_selector(theme), use_container_width=True, height=320)
+        st.info("Pilih tool sesuai desain studi. Jangan memakai satu alat ROB untuk semua jenis studi jika desainnya berbeda.")
+
+    with tab_hetero:
+        st.write("### Heterogeneity & Sensitivity Action Plan")
+        st.dataframe(build_heterogeneity_action_plan(meta_studies), use_container_width=True, height=320)
+        st.info("Jika I² tinggi, prioritaskan subgroup analysis, sensitivity analysis, dan narasi kritis daripada memaksakan pooled conclusion.")
+
+    with tab_export:
+        report = build_quality_control_report(theme, records, screened, meta_studies, rob_rows)
+        st.text_area("Quality Control Report", value=report, height=520)
+        st.download_button(
+            "📥 Download Quality Control Report TXT",
+            data=report.encode("utf-8"),
+            file_name="quality_control_validity_report.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+        qc = build_qc_checklist(records, screened, meta_studies, rob_rows)
+        if "rows_to_xlsx" in globals():
+            st.download_button(
+                "📥 Download QC Checklist Excel",
+                data=rows_to_xlsx(qc, ["area", "criterion", "status", "action"], "QC Checklist"),
+                file_name="quality_control_checklist.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -5209,6 +5601,9 @@ with tabs[14]:
         executive_insight = build_executive_insight(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         research_materials = build_research_materials_report(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Laporan Akhir TXT", data=final_summary.encode("utf-8"), file_name="laporan_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
+
+        qc_report = build_quality_control_report(st.session_state.last_theme or "precision livestock farming", records, screened, meta_studies, st.session_state.rob_rows)
+        st.download_button("📥 Quality Control Report TXT", data=qc_report.encode("utf-8"), file_name="quality_control_validity_report.txt", mime="text/plain", use_container_width=True)
 
         research_assistant_report = build_research_assistant_report(st.session_state.last_theme or "precision livestock farming", records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Research Assistant Report TXT", data=research_assistant_report.encode("utf-8"), file_name="research_assistant_report.txt", mime="text/plain", use_container_width=True)

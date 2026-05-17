@@ -198,3 +198,17 @@ Perbaikan:
 - Error `NameError: name 'search_openaire' is not defined` sudah diperbaiki.
 - Deduplikasi otomatis tetap aktif.
 - `app.py` sudah dicek compile.
+
+## Quality Control & Validity Guard
+
+Ditambahkan modul kendali mutu:
+- Multidatabase search strategy
+- Sinonim, MeSH/controlled vocabulary, Boolean search
+- Grey literature strategy
+- Double-blinded screening template
+- Discrepancy resolution
+- Risk of bias tool selector
+- Sensitivity analysis guidance
+- Heterogeneity action plan
+- Subgroup/meta-regression notes
+- QC checklist dan export report
