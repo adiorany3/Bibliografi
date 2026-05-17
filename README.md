@@ -123,3 +123,15 @@ Perbaikan:
 - Fungsi `search_plos()` sekarang diletakkan sebelum `SOURCE_FUNCTIONS`.
 - Error `NameError: name 'search_plos' is not defined` sudah diperbaiki.
 - `app.py` sudah dicek compile.
+
+## Systematic Review
+
+Ditambahkan tab **Systematic Review**:
+- Framework PICO/PECO/SPIDER otomatis
+- Protokol systematic review
+- Search strategy dan eligibility criteria
+- Study selection procedure
+- Data extraction plan
+- PRISMA checklist
+- Draft systematic review
+- Export protokol, draft, dan checklist

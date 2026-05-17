@@ -1654,7 +1654,7 @@ def build_executive_insight(theme: str, records: List[Dict[str, str]], screened:
 
     lines += [
         "",
-        "3. PRISMA & Screening",
+        "3. PRISMA & Screening, Systematic Review",
         f"- Records identified: {prisma['records_identified']}.",
         f"- After duplicates: {prisma['records_after_duplicates']}.",
         f"- Screened: {prisma['records_screened']}.",
@@ -2668,7 +2668,7 @@ def build_qlevel_checklist(theme: str, records: List[Dict[str, str]], screened: 
             "area": "PRISMA",
             "criterion": "Alur identification, screening, eligibility, included jelas dan dapat direplikasi.",
             "status": "Ready" if screened else "Missing",
-            "action": "Jalankan tab PRISMA & Screening dan export tabel screening."
+            "action": "Jalankan tab PRISMA & Screening, Systematic Review dan export tabel screening."
         },
         {
             "area": "Data quality",
@@ -3172,6 +3172,322 @@ def render_relevant_sources_tab():
         )
 
 
+
+# =========================================================
+# Systematic Review Module
+# =========================================================
+def infer_review_framework(theme: str) -> Dict[str, str]:
+    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    lower = theme.lower()
+
+    if any(x in lower for x in ["intervention", "treatment", "therapy", "program", "training", "education", "health", "clinical"]):
+        framework = "PICO"
+        fields = {
+            "Population": "Populasi/subjek yang diteliti sesuai tema.",
+            "Intervention": "Intervensi, teknologi, program, atau paparan utama.",
+            "Comparison": "Kelompok pembanding, baseline, metode konvensional, atau kondisi kontrol.",
+            "Outcome": "Outcome utama yang dapat diukur secara kuantitatif atau naratif.",
+        }
+    elif any(x in lower for x in ["experience", "perception", "qualitative", "barrier", "challenge", "attitude"]):
+        framework = "SPIDER"
+        fields = {
+            "Sample": "Kelompok partisipan atau sumber data.",
+            "Phenomenon of Interest": f"Fenomena utama terkait {theme}.",
+            "Design": "Desain penelitian kualitatif/mixed-method.",
+            "Evaluation": "Pengalaman, persepsi, hambatan, atau dampak yang dievaluasi.",
+            "Research type": "Qualitative, mixed-method, atau survey.",
+        }
+    else:
+        framework = "PECO/PICO fleksibel"
+        fields = {
+            "Population/Problem": f"Populasi, objek, atau masalah utama pada {theme}.",
+            "Exposure/Intervention": "Teknologi, faktor, metode, atau variabel utama.",
+            "Comparison": "Kelompok pembanding, kondisi lain, atau tidak ada pembanding.",
+            "Outcome": "Outcome, indikator, performa, tren, atau dampak yang dianalisis.",
+        }
+
+    return {"framework": framework, "fields": fields}
+
+
+def build_systematic_review_protocol(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]]) -> str:
+    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    framework = infer_review_framework(theme)
+    searches = build_search_string(theme) if "build_search_string" in globals() else {"combined": theme}
+    inc_exc = build_inclusion_exclusion(theme) if "build_inclusion_exclusion" in globals() else {"inclusion": [], "exclusion": []}
+    prisma = prisma_counts(st.session_state.get("found_total", 0) or len(records), records, screened, st.session_state.get("meta_studies", [])) if "prisma_counts" in globals() else {}
+
+    lines = [
+        "SYSTEMATIC REVIEW PROTOCOL",
+        "",
+        f"Review topic: {theme}",
+        f"Framework: {framework['framework']}",
+        "",
+        "1. Review Question Framework",
+    ]
+    for k, v in framework["fields"].items():
+        lines.append(f"- {k}: {v}")
+
+    lines += [
+        "",
+        "2. Objective",
+        f"- To systematically identify, screen, synthesize, and report available evidence related to {theme}.",
+        "- To map the characteristics of included studies, methodological patterns, outcomes, and evidence gaps.",
+        "- To prepare quantitative synthesis/meta-analysis when effect size data are available.",
+        "",
+        "3. Databases and Sources",
+        "- API/active sources: Crossref, OpenAlex, Semantic Scholar, PLOS, DOAJ, PubMed, Europe PMC, arXiv, DataCite.",
+        "- Recommended manual/import sources: Scopus, Web of Science, AGRIS/FAO, USDA PubAg, CAB Abstracts/CABI, IEEE Xplore, ScienceDirect, SpringerLink, MDPI, Frontiers, Taylor & Francis, Wiley.",
+        "",
+        "4. Search Strategy",
+        f"- Basic query: {searches.get('basic', theme)}",
+        f"- Combined query: {searches.get('combined', theme)}",
+        f"- Bibliometric query: {searches.get('bibliometric', theme)}",
+        f"- Meta-analysis query: {searches.get('meta_analysis', theme)}",
+        "",
+        "5. Inclusion Criteria",
+    ]
+    lines += [f"- {x}" for x in inc_exc.get("inclusion", [])]
+
+    lines += ["", "6. Exclusion Criteria"]
+    lines += [f"- {x}" for x in inc_exc.get("exclusion", [])]
+
+    lines += [
+        "",
+        "7. Study Selection Procedure",
+        "- Import all retrieved records into the application.",
+        "- Remove duplicates using DOI and title-based matching.",
+        "- Screen titles and abstracts using eligibility criteria.",
+        "- Label each record as Included, Excluded, or Maybe.",
+        "- Retrieve full text for Included and Maybe records.",
+        "- Record exclusion reasons for transparency.",
+        "",
+        "8. Data Extraction Plan",
+    ]
+    lines += [f"- {x}" for x in build_extraction_protocol(theme)] if "build_extraction_protocol" in globals() else ["- Extract bibliographic and methodological data."]
+
+    lines += [
+        "",
+        "9. Quality Assessment / Risk of Bias",
+        "- Assess randomization or sampling appropriateness.",
+        "- Assess blinding or outcome measurement objectivity where applicable.",
+        "- Assess incomplete data and attrition.",
+        "- Assess selective reporting.",
+        "- Assess confounding control.",
+        "- Assess whether sample size is adequate.",
+        "",
+        "10. Synthesis Plan",
+        "- Conduct descriptive synthesis for all included studies.",
+        "- Conduct bibliographic synthesis for publication trends, journals, authors, keywords, and sources.",
+        "- Conduct meta-analysis only for studies with effect size and standard error or calculable raw data.",
+        "- Use random-effects model as primary when heterogeneity is expected.",
+        "- Report Q, tau², I², confidence interval, and p-value.",
+        "- Conduct sensitivity analysis and publication bias assessment when study count is sufficient.",
+        "",
+        "11. PRISMA Flow Snapshot",
+    ]
+    for k, v in prisma.items():
+        lines.append(f"- {k}: {v}")
+
+    return "\n".join(lines)
+
+
+def build_prisma_checklist() -> List[Dict[str, str]]:
+    return [
+        {"section": "Title", "item": "Identify the report as a systematic review, meta-analysis, or both.", "status": "To check"},
+        {"section": "Abstract", "item": "Provide structured summary: background, objectives, sources, eligibility, synthesis, results, limitations.", "status": "To check"},
+        {"section": "Rationale", "item": "Describe why the review is needed in light of existing knowledge.", "status": "To check"},
+        {"section": "Objectives", "item": "State review questions using PICO/PECO/SPIDER or suitable framework.", "status": "To check"},
+        {"section": "Eligibility", "item": "Specify inclusion and exclusion criteria clearly.", "status": "To check"},
+        {"section": "Information sources", "item": "List databases, registers, websites, organizations, and last search date.", "status": "To check"},
+        {"section": "Search strategy", "item": "Present full search strings for at least one database.", "status": "To check"},
+        {"section": "Selection process", "item": "Explain screening method and number of reviewers if applicable.", "status": "To check"},
+        {"section": "Data collection", "item": "Describe extraction process and variables collected.", "status": "To check"},
+        {"section": "Data items", "item": "List all outcomes and variables sought.", "status": "To check"},
+        {"section": "Risk of bias", "item": "Describe tool/domains used to assess quality.", "status": "To check"},
+        {"section": "Synthesis methods", "item": "Describe narrative synthesis and meta-analysis methods.", "status": "To check"},
+        {"section": "Study selection results", "item": "Report PRISMA flow counts.", "status": "To check"},
+        {"section": "Study characteristics", "item": "Present characteristics of included studies.", "status": "To check"},
+        {"section": "Risk of bias results", "item": "Present risk of bias for each included study.", "status": "To check"},
+        {"section": "Results of syntheses", "item": "Report bibliographic synthesis and meta-analysis findings if available.", "status": "To check"},
+        {"section": "Reporting bias", "item": "Report publication bias assessment or explain why not possible.", "status": "To check"},
+        {"section": "Certainty", "item": "Discuss certainty or strength of evidence.", "status": "To check"},
+        {"section": "Discussion", "item": "Summarize findings, limitations, implications, and future research.", "status": "To check"},
+        {"section": "Registration", "item": "Report protocol registration if available, or state not registered.", "status": "To check"},
+    ]
+
+
+def build_systematic_review_results_narrative(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> str:
+    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    prisma = prisma_counts(st.session_state.get("found_total", 0) or len(records), records, screened, meta_studies) if "prisma_counts" in globals() else {}
+    m = get_metrics(records) if records else {}
+    years = year_distribution(records) if records else {}
+    period = f"{min(years.keys())}–{max(years.keys())}" if years else "not available"
+    dbs = count_by(records, "database", 8) if records else {}
+    journals = count_by(records, "journal", 8) if records else {}
+    keywords = keyword_distribution(records, 10) if records else {}
+
+    text = [
+        f"The systematic review on {theme} identified {prisma.get('records_identified', len(records))} initial records. "
+        f"After deduplication and relevance filtering, {len(records)} records were retained for screening. "
+        f"The publication period covered {period}. "
+        f"DOI information was available for {m.get('with_doi', 0)} records and abstracts were available for {m.get('with_abstract', 0)} records.",
+        "",
+        f"The dominant sources were {', '.join([f'{k} ({v})' for k, v in dbs.items()]) if dbs else 'not available'}. "
+        f"The dominant journals or venues were {', '.join([f'{k} ({v})' for k, v in journals.items()]) if journals else 'not available'}. "
+        f"The most frequent keywords were {', '.join([f'{k} ({v})' for k, v in keywords.items()]) if keywords else 'not available'}.",
+        "",
+        f"Screening resulted in {prisma.get('studies_included_review', 0)} included studies for review and {prisma.get('studies_included_meta', 0)} studies eligible for meta-analysis. "
+    ]
+
+    if meta_result.get("k", 0):
+        main = meta_result["random"]
+        h = meta_result["heterogeneity"]
+        text.append(
+            f"The quantitative synthesis included {meta_result['k']} studies. The random-effects pooled estimate was {main['pooled']:.4f} "
+            f"with 95% CI {main['ci'][0]:.4f} to {main['ci'][1]:.4f}. Heterogeneity was I² = {h['I2']:.2f}%, tau² = {h['tau2']:.4f}, and Q = {h['Q']:.4f}."
+        )
+    else:
+        text.append(
+            "A quantitative meta-analysis could not yet be finalized because effect size and standard error data were not sufficiently available in the metadata. Full-text extraction is required."
+        )
+
+    if rob_rows:
+        risk_counts = Counter(r.get("overall_risk", "Unclear") for r in rob_rows)
+        text.append(f"Risk of bias distribution was: {', '.join([f'{k} ({v})' for k, v in risk_counts.items()])}.")
+    else:
+        text.append("Risk of bias assessment should be completed during full-text review.")
+
+    return "\n".join(text)
+
+
+def build_systematic_review_discussion(theme: str, records: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> str:
+    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    gaps = build_gap_and_novelty(theme, records, meta_result)["gaps"] if "build_gap_and_novelty" in globals() else []
+    ev = evidence_strength(records, meta_result, rob_rows) if "evidence_strength" in globals() else {"level": "Not assessed", "reason": ""}
+
+    return (
+        f"This systematic review shows that the evidence base on {theme} is developing but still requires careful interpretation. "
+        f"The bibliographic results indicate the main publication sources, research themes, and metadata quality, while the screening results clarify which studies are eligible for deeper review. "
+        f"The main gaps identified are: {', '.join(gaps) if gaps else 'limited reporting consistency and incomplete quantitative data'}. "
+        f"The current evidence strength is categorized as {ev['level']}. {ev['reason']} "
+        f"Future studies should improve transparent reporting of methods, sample characteristics, outcome measures, and quantitative statistics needed for meta-analysis."
+    )
+
+
+def build_systematic_review_draft(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> str:
+    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    framework = infer_review_framework(theme)
+    searches = build_search_string(theme) if "build_search_string" in globals() else {"combined": theme}
+
+    title = f"Systematic Review of {theme.title()}: Evidence Mapping and Meta-Analytic Readiness"
+
+    return f"""{title}
+
+ABSTRACT
+Background: Research on {theme} has expanded across multiple disciplines and databases, creating a need for structured evidence synthesis.
+Objective: This systematic review aims to identify, screen, and synthesize studies related to {theme}, while assessing the readiness of the evidence base for meta-analysis.
+Methods: A structured search was conducted using bibliographic sources available in the application and recommended manual databases. Records were deduplicated, screened using predefined eligibility criteria, and synthesized using bibliographic and systematic review procedures. The review framework used was {framework['framework']}. The main search string was: {searches.get('combined', theme)}.
+Results: {build_systematic_review_results_narrative(theme, records, screened, meta_studies, rob_rows)}
+Conclusion: The systematic review provides a structured overview of the evidence base, identifies key gaps, and prepares the foundation for quantitative synthesis where effect size data are available.
+
+1. INTRODUCTION
+Research on {theme} is increasingly important because it connects theoretical development, empirical evidence, and practical implementation. However, existing studies are often distributed across multiple databases and use different designs, populations, outcomes, and reporting standards. A systematic review is therefore needed to identify relevant studies, assess their eligibility, summarize their characteristics, and determine whether the evidence can support meta-analysis.
+
+2. METHODS
+2.1 Review Design
+This study was designed as a systematic review with bibliographic mapping and meta-analysis preparation. The review followed a PRISMA-oriented workflow consisting of identification, screening, eligibility assessment, inclusion, data extraction, risk of bias assessment, and synthesis.
+
+2.2 Review Framework
+The review used the {framework['framework']} framework:
+{format_bullets([f"{k}: {v}" for k, v in framework['fields'].items()])}
+
+2.3 Search Strategy
+The search strategy combined the main topic terms with methodological and evidence synthesis terms. The recommended search string was:
+{searches.get('combined', theme)}
+
+2.4 Eligibility Criteria
+{format_bullets(build_inclusion_exclusion(theme)['inclusion'])}
+
+Exclusion criteria:
+{format_bullets(build_inclusion_exclusion(theme)['exclusion'])}
+
+2.5 Study Selection
+Records were screened based on title, abstract, DOI availability, year, indexing indicators, and relevance to the review question. Each record was categorized as Included, Excluded, or Maybe. Full-text review is recommended for all Included and Maybe studies.
+
+2.6 Data Extraction
+The extraction process covered bibliographic data, study characteristics, population, intervention/exposure, comparison, outcome, effect size data, and risk of bias domains.
+
+2.7 Risk of Bias
+Risk of bias was assessed using domains related to randomization/sampling, blinding/objective measurement, incomplete data, selective reporting, confounding control, and sample size adequacy.
+
+2.8 Synthesis
+A narrative synthesis was used for all included studies. Meta-analysis was conducted only when effect size and standard error or calculable raw data were available.
+
+3. RESULTS
+{build_systematic_review_results_narrative(theme, records, screened, meta_studies, rob_rows)}
+
+4. DISCUSSION
+{build_systematic_review_discussion(theme, records, meta_studies, rob_rows)}
+
+5. LIMITATIONS
+{format_bullets(build_limitations(theme, records, meta_result) if "build_limitations" in globals() else ["The review depends on database coverage and metadata completeness."])}
+
+6. CONCLUSION
+{build_conclusion_draft(theme, records, meta_result) if "build_conclusion_draft" in globals() else f"This systematic review summarizes the evidence base on {theme} and identifies directions for future research."}
+
+PRISMA CHECKLIST
+{format_bullets([f"{x['section']}: {x['item']}" for x in build_prisma_checklist()])}
+"""
+
+
+def render_systematic_review_tab():
+    st.subheader("📋 Systematic Review")
+    records = st.session_state.theme_records or st.session_state.records
+    screened = st.session_state.screened
+    meta_studies = st.session_state.meta_studies
+    rob_rows = st.session_state.rob_rows
+    theme = st.session_state.last_theme or st.text_input("Tema systematic review", value="precision livestock farming", key="sysrev_theme")
+
+    framework = infer_review_framework(theme)
+    st.write("### Framework Review")
+    st.info(f"Framework yang disarankan: **{framework['framework']}**")
+    st.dataframe([{"element": k, "description": v} for k, v in framework["fields"].items()], use_container_width=True)
+
+    tab_protocol, tab_prisma, tab_draft, tab_export = st.tabs(["🧭 Protokol", "✅ PRISMA Checklist", "📄 Draft", "📤 Export"])
+
+    with tab_protocol:
+        protocol = build_systematic_review_protocol(theme, records, screened)
+        st.text_area("Protokol systematic review", value=protocol, height=560)
+
+    with tab_prisma:
+        checklist = build_prisma_checklist()
+        st.dataframe(checklist, use_container_width=True, height=520)
+        st.info("Checklist ini adalah template praktis. Sesuaikan dengan pedoman PRISMA terbaru dan ketentuan jurnal tujuan.")
+
+    with tab_draft:
+        draft = build_systematic_review_draft(theme, records, screened, meta_studies, rob_rows)
+        st.text_area("Draft systematic review", value=draft, height=700)
+
+    with tab_export:
+        protocol = build_systematic_review_protocol(theme, records, screened)
+        draft = build_systematic_review_draft(theme, records, screened, meta_studies, rob_rows)
+        checklist = build_prisma_checklist()
+        st.download_button("📥 Download Protokol Systematic Review TXT", data=protocol.encode("utf-8"), file_name="protokol_systematic_review.txt", mime="text/plain", use_container_width=True)
+        st.download_button("📥 Download Draft Systematic Review TXT", data=draft.encode("utf-8"), file_name="draft_systematic_review.txt", mime="text/plain", use_container_width=True)
+        st.download_button("📥 Download PRISMA Checklist CSV", data=safe_csv(checklist, ["section", "item", "status"]), file_name="prisma_checklist.csv", mime="text/csv", use_container_width=True)
+        if "rows_to_xlsx" in globals():
+            st.download_button(
+                "📥 Download PRISMA Checklist Excel",
+                data=rows_to_xlsx(checklist, ["section", "item", "status"], "PRISMA Checklist"),
+                file_name="prisma_checklist.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -3206,7 +3522,8 @@ with st.sidebar:
 tabs = st.tabs([
     "🔬 Workflow Tema",
     "📚 Bibliografi",
-    "✅ PRISMA & Screening",
+    "✅ PRISMA & Screening, Systematic Review",
+    "📋 Systematic Review",
     "🧪 Meta-Analysis",
     "⚖️ Risk of Bias",
     "📉 Sensitivity & Bias",
@@ -3605,6 +3922,11 @@ with tabs[10]:
         executive_insight = build_executive_insight(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         research_materials = build_research_materials_report(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Laporan Akhir TXT", data=final_summary.encode("utf-8"), file_name="laporan_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
+
+        systematic_protocol = build_systematic_review_protocol(st.session_state.last_theme, records, screened)
+        systematic_draft = build_systematic_review_draft(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
+        st.download_button("📥 Protokol Systematic Review TXT", data=systematic_protocol.encode("utf-8"), file_name="protokol_systematic_review.txt", mime="text/plain", use_container_width=True)
+        st.download_button("📥 Draft Systematic Review TXT", data=systematic_draft.encode("utf-8"), file_name="draft_systematic_review.txt", mime="text/plain", use_container_width=True)
         st.download_button("📥 Insight Akhir TXT", data=executive_insight.encode("utf-8"), file_name="insight_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
 
         review_draft = build_journal_review_draft(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
@@ -3628,7 +3950,7 @@ with tabs[11]:
 2. Masukkan tema penelitian.
 3. Jalankan pencarian otomatis.
 4. Cek hasil di **Bibliografi**.
-5. Cek screening dan PRISMA di **PRISMA & Screening**.
+5. Cek screening dan PRISMA di **PRISMA & Screening, Systematic Review**.
 6. Download format Excel meta-analysis dari tab **Meta-Analysis**.
 7. Isi effect size/SE atau data mentah dari full-text artikel.
 8. Upload kembali file tersebut ke tab **Meta-Analysis**.
