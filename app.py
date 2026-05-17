@@ -5156,6 +5156,356 @@ def render_quality_control_inside_panduan():
             )
 
 
+
+# =========================================================
+# Tables & Figures Plan for Review Article
+# =========================================================
+def build_review_table_figure_plan_enhanced() -> List[Dict[str, str]]:
+    return [
+        {
+            "item": "Table 1",
+            "title": "Search strategy and database sources",
+            "description": "Database, query string, date, number of records.",
+            "purpose": "Menunjukkan transparansi literature search dan replikasi pencarian.",
+            "recommended_section": "Methods"
+        },
+        {
+            "item": "Table 2",
+            "title": "Inclusion and exclusion criteria",
+            "description": "Eligibility criteria for bibliographic review and meta-analysis.",
+            "purpose": "Menjelaskan batasan studi yang masuk dan keluar.",
+            "recommended_section": "Methods"
+        },
+        {
+            "item": "Table 3",
+            "title": "Characteristics of included studies",
+            "description": "Author, year, title, journal, country, population, outcome, DOI.",
+            "purpose": "Menampilkan profil studi yang dianalisis.",
+            "recommended_section": "Results"
+        },
+        {
+            "item": "Table 4",
+            "title": "Top journals, authors, and keywords",
+            "description": "Bibliographic performance indicators.",
+            "purpose": "Menampilkan indikator bibliografi utama.",
+            "recommended_section": "Results"
+        },
+        {
+            "item": "Table 5",
+            "title": "Risk of bias assessment",
+            "description": "Risk domains and overall risk judgment.",
+            "purpose": "Menunjukkan kualitas dan reliabilitas studi.",
+            "recommended_section": "Results / Quality Assessment"
+        },
+        {
+            "item": "Figure 1",
+            "title": "PRISMA flow diagram",
+            "description": "Identification, screening, eligibility, included studies.",
+            "purpose": "Memvisualisasikan alur seleksi studi.",
+            "recommended_section": "Methods / Results"
+        },
+        {
+            "item": "Figure 2",
+            "title": "Publication trend by year",
+            "description": "Annual publication distribution.",
+            "purpose": "Menunjukkan perkembangan publikasi dari waktu ke waktu.",
+            "recommended_section": "Results"
+        },
+        {
+            "item": "Figure 3",
+            "title": "Keyword distribution or science mapping",
+            "description": "Main research themes and keyword frequency.",
+            "purpose": "Menjelaskan tema riset dominan dan arah perkembangan bidang.",
+            "recommended_section": "Results / Discussion"
+        },
+    ]
+
+
+def build_table1_search_strategy(records: List[Dict[str, str]], theme: str) -> List[Dict[str, str]]:
+    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    source_counts = Counter(clean(r.get("database", "Unknown")) or "Unknown" for r in records)
+    if not source_counts:
+        source_counts = Counter({"Crossref": 0, "OpenAlex": 0, "Scopus": 0, "Web of Science": 0, "PubMed": 0})
+    search_string = build_search_string(theme)["combined"] if "build_search_string" in globals() else theme
+    rows = []
+    for db, count in source_counts.items():
+        rows.append({
+            "database": db,
+            "query_string": search_string,
+            "search_date": "",
+            "number_of_records": count,
+            "notes": "Lengkapi tanggal pencarian dan sesuaikan syntax database."
+        })
+    return rows
+
+
+def build_table2_eligibility(theme: str) -> List[Dict[str, str]]:
+    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    inc_exc = build_inclusion_exclusion(theme) if "build_inclusion_exclusion" in globals() else {
+        "inclusion": [f"Studies related to {theme}"],
+        "exclusion": ["Studies not related to the topic"]
+    }
+    rows = []
+    for x in inc_exc.get("inclusion", []):
+        rows.append({"criteria_type": "Inclusion", "criterion": x, "rationale": ""})
+    for x in inc_exc.get("exclusion", []):
+        rows.append({"criteria_type": "Exclusion", "criterion": x, "rationale": ""})
+    return rows
+
+
+def build_table3_characteristics(records: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    rows = []
+    for r in records[:300]:
+        rows.append({
+            "author": clean(r.get("authors", "")).split(";")[0],
+            "year": r.get("year", ""),
+            "title": r.get("title", ""),
+            "journal": r.get("journal", ""),
+            "country": "",
+            "population": "",
+            "intervention_exposure": "",
+            "comparison": "",
+            "outcome": "",
+            "study_design": "",
+            "doi": r.get("doi", ""),
+            "notes": ""
+        })
+    if not rows:
+        rows.append({
+            "author": "",
+            "year": "",
+            "title": "",
+            "journal": "",
+            "country": "",
+            "population": "",
+            "intervention_exposure": "",
+            "comparison": "",
+            "outcome": "",
+            "study_design": "",
+            "doi": "",
+            "notes": ""
+        })
+    return rows
+
+
+def build_table4_biblio_indicators(records: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    rows = []
+    journals = count_by(records, "journal", 10) if records else {}
+    authors = Counter()
+    for r in records:
+        for a in split_authors(r.get("authors", "")):
+            if a:
+                authors[a] += 1
+    keywords = keyword_distribution(records, 15) if records else {}
+
+    for k, v in journals.items():
+        rows.append({"indicator_type": "Top journal", "item": k, "frequency": v, "notes": ""})
+    for k, v in authors.most_common(10):
+        rows.append({"indicator_type": "Top author", "item": k, "frequency": v, "notes": ""})
+    for k, v in keywords.items():
+        rows.append({"indicator_type": "Top keyword", "item": k, "frequency": v, "notes": ""})
+
+    if not rows:
+        rows.append({"indicator_type": "Top journal/author/keyword", "item": "", "frequency": "", "notes": ""})
+    return rows
+
+
+def build_table5_risk_of_bias(rob_rows: List[Dict[str, str]], records: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    if rob_rows:
+        rows = []
+        for r in rob_rows:
+            rows.append({
+                "study_id": r.get("study_id", ""),
+                "randomization_sampling": r.get("randomization", r.get("sampling", "")),
+                "blinding_measurement": r.get("blinding", r.get("measurement", "")),
+                "incomplete_data": r.get("incomplete_data", ""),
+                "selective_reporting": r.get("selective_reporting", ""),
+                "confounding_control": r.get("confounding", r.get("confounding_control", "")),
+                "sample_size_adequacy": r.get("sample_size", r.get("sample_size_adequacy", "")),
+                "overall_risk": r.get("overall_risk", ""),
+                "notes": r.get("notes", "")
+            })
+        return rows
+
+    rows = []
+    for i, r in enumerate(records[:100], 1):
+        rows.append({
+            "study_id": f"{clean(r.get('authors','')).split(';')[0]} {r.get('year','')}".strip() or f"Study {i}",
+            "randomization_sampling": "",
+            "blinding_measurement": "",
+            "incomplete_data": "",
+            "selective_reporting": "",
+            "confounding_control": "",
+            "sample_size_adequacy": "",
+            "overall_risk": "",
+            "notes": ""
+        })
+    if not rows:
+        rows.append({
+            "study_id": "",
+            "randomization_sampling": "",
+            "blinding_measurement": "",
+            "incomplete_data": "",
+            "selective_reporting": "",
+            "confounding_control": "",
+            "sample_size_adequacy": "",
+            "overall_risk": "",
+            "notes": ""
+        })
+    return rows
+
+
+def build_figure_plan_data(records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]]) -> List[Dict[str, str]]:
+    prisma = prisma_counts(st.session_state.get("found_total", 0) or len(records), records, screened, meta_studies) if "prisma_counts" in globals() else {}
+    rows = []
+    for k, v in prisma.items():
+        rows.append({"figure": "Figure 1 PRISMA flow diagram", "data_point": k, "value": v, "notes": ""})
+
+    years = year_distribution(records) if records else {}
+    for y, c in years.items():
+        rows.append({"figure": "Figure 2 Publication trend by year", "data_point": str(y), "value": c, "notes": ""})
+
+    keywords = keyword_distribution(records, 20) if records else {}
+    for k, v in keywords.items():
+        rows.append({"figure": "Figure 3 Keyword distribution / science mapping", "data_point": k, "value": v, "notes": ""})
+
+    if not rows:
+        rows.append({"figure": "Figure 1/2/3", "data_point": "", "value": "", "notes": ""})
+    return rows
+
+
+def build_tables_figures_report(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> str:
+    lines = [
+        "TABLES AND FIGURES PLAN FOR REVIEW ARTICLE",
+        "",
+        f"Theme: {theme or '-'}",
+        "",
+        "1. Required Tables and Figures"
+    ]
+    for row in build_review_table_figure_plan_enhanced():
+        lines.append(f"- {row['item']}: {row['title']} — {row['description']} Purpose: {row['purpose']} Section: {row['recommended_section']}")
+
+    lines += [
+        "",
+        "2. Table Preparation Notes",
+        "- Table 1 harus memuat database, search string, tanggal pencarian, dan jumlah record.",
+        "- Table 2 harus memisahkan kriteria inklusi dan eksklusi.",
+        "- Table 3 harus dilengkapi dari full-text, terutama country, population, intervention/exposure, comparison, outcome, dan design.",
+        "- Table 4 dapat dihasilkan dari metadata bibliografi.",
+        "- Table 5 harus diisi berdasarkan full-text dan tool risk of bias yang sesuai.",
+        "",
+        "3. Figure Preparation Notes",
+        "- Figure 1 menggunakan data PRISMA counts.",
+        "- Figure 2 menggunakan distribusi publikasi tahunan.",
+        "- Figure 3 menggunakan keyword frequency atau hasil science mapping.",
+        "- Untuk jurnal Q-level, semua figure sebaiknya resolusi tinggi dan memiliki caption yang menjelaskan insight, bukan hanya tampilan grafik.",
+    ]
+    return "\n".join(lines)
+
+
+def render_tables_figures_inside_panduan():
+    st.divider()
+    st.subheader("📊 Tables & Figures Plan")
+    st.caption("Rencana tabel dan figure utama untuk artikel systematic review, bibliometric review, dan meta-analysis.")
+
+    records = st.session_state.get("theme_records", []) or st.session_state.get("records", [])
+    screened = st.session_state.get("screened", [])
+    meta_studies = st.session_state.get("meta_studies", [])
+    rob_rows = st.session_state.get("rob_rows", [])
+    theme = st.session_state.get("last_theme", "") or "precision livestock farming"
+
+    tab_plan, tab_tables, tab_figures, tab_export = st.tabs([
+        "🧾 Plan", "📋 Template Tables", "🖼️ Figure Data", "📤 Export"
+    ])
+
+    with tab_plan:
+        plan = build_review_table_figure_plan_enhanced()
+        st.dataframe(plan, use_container_width=True, height=360)
+        st.info("Daftar ini mengikuti kebutuhan umum artikel review Q-level: search strategy, eligibility, characteristics, bibliographic indicators, risk of bias, PRISMA, publication trend, dan keyword mapping.")
+
+    with tab_tables:
+        selected = st.selectbox(
+            "Pilih template tabel",
+            [
+                "Table 1 - Search strategy and database sources",
+                "Table 2 - Inclusion and exclusion criteria",
+                "Table 3 - Characteristics of included studies",
+                "Table 4 - Top journals, authors, and keywords",
+                "Table 5 - Risk of bias assessment",
+            ],
+            key="selected_review_table_template"
+        )
+
+        if selected.startswith("Table 1"):
+            rows = build_table1_search_strategy(records, theme)
+            fields = ["database", "query_string", "search_date", "number_of_records", "notes"]
+        elif selected.startswith("Table 2"):
+            rows = build_table2_eligibility(theme)
+            fields = ["criteria_type", "criterion", "rationale"]
+        elif selected.startswith("Table 3"):
+            rows = build_table3_characteristics(records)
+            fields = ["author", "year", "title", "journal", "country", "population", "intervention_exposure", "comparison", "outcome", "study_design", "doi", "notes"]
+        elif selected.startswith("Table 4"):
+            rows = build_table4_biblio_indicators(records)
+            fields = ["indicator_type", "item", "frequency", "notes"]
+        else:
+            rows = build_table5_risk_of_bias(rob_rows, records)
+            fields = ["study_id", "randomization_sampling", "blinding_measurement", "incomplete_data", "selective_reporting", "confounding_control", "sample_size_adequacy", "overall_risk", "notes"]
+
+        st.dataframe(rows, use_container_width=True, height=420)
+
+        filename = selected.lower().split(" - ")[0].replace(" ", "_") + ".xlsx"
+        if "rows_to_xlsx" in globals():
+            st.download_button(
+                "📥 Download Template Excel",
+                data=rows_to_xlsx(rows, fields, selected[:31]),
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        else:
+            st.download_button(
+                "📥 Download Template CSV",
+                data=safe_csv(rows, fields),
+                file_name=filename.replace(".xlsx", ".csv"),
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    with tab_figures:
+        fig_rows = build_figure_plan_data(records, screened, meta_studies)
+        st.dataframe(fig_rows, use_container_width=True, height=420)
+        st.info("Gunakan data ini untuk membuat PRISMA flow, tren publikasi tahunan, dan keyword distribution/science mapping.")
+        if "rows_to_xlsx" in globals():
+            st.download_button(
+                "📥 Download Figure Data Excel",
+                data=rows_to_xlsx(fig_rows, ["figure", "data_point", "value", "notes"], "Figure Data"),
+                file_name="figure_data_plan.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+    with tab_export:
+        report = build_tables_figures_report(theme, records, screened, meta_studies, rob_rows)
+        st.text_area("Tables & Figures Report", value=report, height=420)
+        st.download_button(
+            "📥 Download Tables & Figures Report TXT",
+            data=report.encode("utf-8"),
+            file_name="tables_figures_plan_report.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+        if "rows_to_xlsx" in globals():
+            st.download_button(
+                "📥 Download Tables & Figures Plan Excel",
+                data=rows_to_xlsx(build_review_table_figure_plan_enhanced(), ["item", "title", "description", "purpose", "recommended_section"], "Table Figure Plan"),
+                file_name="tables_figures_plan.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -5601,6 +5951,9 @@ with tabs[14]:
         executive_insight = build_executive_insight(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         research_materials = build_research_materials_report(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Laporan Akhir TXT", data=final_summary.encode("utf-8"), file_name="laporan_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
+
+        tables_figures_report = build_tables_figures_report(st.session_state.last_theme or "precision livestock farming", records, screened, meta_studies, st.session_state.rob_rows)
+        st.download_button("📥 Tables & Figures Plan Report TXT", data=tables_figures_report.encode("utf-8"), file_name="tables_figures_plan_report.txt", mime="text/plain", use_container_width=True)
 
         qc_report = build_quality_control_report(st.session_state.last_theme or "precision livestock farming", records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Quality Control Report TXT", data=qc_report.encode("utf-8"), file_name="quality_control_validity_report.txt", mime="text/plain", use_container_width=True)

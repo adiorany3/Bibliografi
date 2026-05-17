@@ -212,3 +212,16 @@ Ditambahkan modul kendali mutu:
 - Heterogeneity action plan
 - Subgroup/meta-regression notes
 - QC checklist dan export report
+
+## Tables & Figures Plan
+
+Ditambahkan modul **Tables & Figures Plan**:
+- Table 1 Search strategy and database sources
+- Table 2 Inclusion and exclusion criteria
+- Table 3 Characteristics of included studies
+- Table 4 Top journals, authors, and keywords
+- Table 5 Risk of bias assessment
+- Figure 1 PRISMA flow diagram
+- Figure 2 Publication trend by year
+- Figure 3 Keyword distribution/science mapping
+- Template Excel untuk tabel dan data figure
