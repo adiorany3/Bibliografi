@@ -135,3 +135,12 @@ Ditambahkan tab **Systematic Review**:
 - PRISMA checklist
 - Draft systematic review
 - Export protokol, draft, dan checklist
+
+## Q-Level Review Studio
+
+Ditambahkan modul **Review Studio** untuk mempermudah penulis:
+- Mengumpulkan data: rencana database, query, upload manual, deduplikasi
+- Menganalisa data: decision tree, missing data, readiness score
+- Menulis draft: prompts tiap bagian naskah dan draft cepat
+- Menyesuaikan Q-level: target journal fit, strategi perbaikan, action plan
+- Export action plan dan Q-Level Review Studio Report
