@@ -2138,6 +2138,399 @@ def render_research_materials_tab():
     )
 
 
+
+# =========================================================
+# Journal Review Builder
+# =========================================================
+def format_bullets(items: List[str]) -> str:
+    return "\n".join([f"- {x}" for x in items]) if items else "-"
+
+
+def review_article_type(meta_result: Dict[str, object]) -> str:
+    if meta_result.get("k", 0):
+        return "systematic literature review with bibliometric mapping and meta-analysis"
+    return "systematic bibliometric review with meta-analysis preparation"
+
+
+def build_review_abstract(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_result: Dict[str, object]) -> str:
+    theme = normalize_theme(theme)
+    m = get_metrics(records) if records else {"with_doi": 0, "with_abstract": 0, "scopus": 0, "wos": 0, "high": 0}
+    prisma = prisma_counts(st.session_state.get("found_total", 0) or len(records), records, screened, st.session_state.get("meta_studies", []))
+    years = year_distribution(records) if records else {}
+    period = f"{min(years.keys())}–{max(years.keys())}" if years else "the selected publication period"
+
+    meta_sentence = (
+        f"Meta-analysis was conducted on {meta_result['k']} eligible studies and produced a pooled random-effects estimate of "
+        f"{meta_result['random']['pooled']:.4f} with 95% CI {meta_result['random']['ci'][0]:.4f} to {meta_result['random']['ci'][1]:.4f} "
+        f"and I² of {meta_result['heterogeneity']['I2']:.2f}%."
+        if meta_result.get("k", 0)
+        else "The bibliographic dataset was prepared for meta-analysis, but quantitative pooling requires additional full-text extraction of effect sizes and standard errors."
+    )
+
+    return (
+        f"This review examines the development, structure, and evidence base of research on {theme}. "
+        f"A structured search was conducted across credible bibliographic sources and the records were screened using PRISMA-oriented criteria. "
+        f"After deduplication and relevance filtering, {len(records)} relevant records from {period} were analyzed. "
+        f"The bibliographic analysis summarized publication trends, dominant sources, journals, authors, keywords, metadata quality, and indexing signals. "
+        f"The screening process identified {prisma['studies_included_review']} records for review and {prisma['studies_included_meta']} studies for quantitative synthesis. "
+        f"{meta_sentence} "
+        f"The findings provide a structured map of the literature, identify research gaps, and offer a reproducible basis for future systematic review and evidence synthesis."
+    )
+
+
+def build_review_introduction(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> str:
+    theme = normalize_theme(theme)
+    gap_novelty = build_gap_and_novelty(theme, records, meta_result)
+    return (
+        f"Research on {theme} has grown as scholars and practitioners increasingly seek evidence-based understanding of its concepts, applications, outcomes, and methodological development. "
+        f"However, the literature is often distributed across multiple databases, journals, disciplines, and methodological traditions. "
+        f"This condition makes it difficult to identify dominant research streams, influential publication sources, and the extent to which the existing evidence can be synthesized quantitatively. "
+        f"A bibliometric review is useful for mapping the knowledge structure of the field, while a meta-analysis can estimate the magnitude and consistency of empirical effects when comparable quantitative data are available.\n\n"
+        f"The present review responds to the following gaps: {', '.join(gap_novelty['gaps'])}. "
+        f"The novelty of this study lies in its integrated workflow that combines bibliographic mapping, PRISMA-based screening, risk of bias assessment, meta-analysis preparation, and evidence-readiness evaluation. "
+        f"Therefore, this review is designed not only to describe the literature landscape, but also to assess whether the available studies are sufficiently prepared for quantitative evidence synthesis."
+    )
+
+
+def build_review_methods(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_result: Dict[str, object]) -> str:
+    theme = normalize_theme(theme)
+    searches = build_search_string(theme)
+    inc_exc = build_inclusion_exclusion(theme)
+    prisma = prisma_counts(st.session_state.get("found_total", 0) or len(records), records, screened, st.session_state.get("meta_studies", []))
+    article_type = review_article_type(meta_result)
+
+    return (
+        f"This study was designed as a {article_type}. The review workflow consisted of identification, deduplication, relevance screening, eligibility assessment, bibliographic analysis, and meta-analytic preparation or synthesis.\n\n"
+        f"Search strategy. The main search string was: {searches['combined']}. Additional search strings were prepared for bibliometric mapping and meta-analysis: {searches['bibliometric']} and {searches['meta_analysis']}. "
+        f"The search was conducted across available bibliographic sources such as Crossref, OpenAlex, PubMed, Semantic Scholar, DOAJ, arXiv, Europe PMC, and DataCite, depending on the relevance of the topic.\n\n"
+        f"Inclusion criteria included: {', '.join(inc_exc['inclusion'])}. Exclusion criteria included: {', '.join(inc_exc['exclusion'])}. "
+        f"Records were screened using title, abstract, DOI availability, publication year, indexing indicators, and theme relevance score. "
+        f"The PRISMA-oriented flow produced {prisma['records_identified']} identified records, {prisma['records_after_duplicates']} records after deduplication, {prisma['records_screened']} screened records, {prisma['records_excluded']} excluded records, and {prisma['studies_included_review']} records included for review.\n\n"
+        f"Bibliographic analysis. The bibliographic analysis summarized publication year distribution, source/database distribution, dominant journals, author productivity, keyword frequency, DOI coverage, abstract coverage, and indexing/high-impact candidate signals.\n\n"
+        f"Meta-analysis. For quantitative synthesis, eligible studies were required to provide effect size and standard error or raw data that could be transformed into effect size, including mean, standard deviation, sample size, event counts, odds ratio, risk ratio, or correlation. "
+        f"Fixed-effect and random-effects models were calculated, with heterogeneity assessed using Q, tau², and I². Sensitivity analysis used leave-one-out analysis, while publication bias was approximated using an Egger-type regression when sufficient studies were available.\n\n"
+        f"Risk of bias. Study quality was evaluated using checklist domains including randomization, blinding, incomplete data, selective reporting, confounding control, and sample size adequacy."
+    )
+
+
+def build_review_results(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_result: Dict[str, object], rob_rows: List[Dict[str, str]]) -> str:
+    theme = normalize_theme(theme)
+    m = get_metrics(records) if records else {}
+    years = year_distribution(records) if records else {}
+    dbs = count_by(records, "database", 10) if records else {}
+    journals = count_by(records, "journal", 10) if records else {}
+    keywords = keyword_distribution(records, 10) if records else {}
+    prisma = prisma_counts(st.session_state.get("found_total", 0) or len(records), records, screened, st.session_state.get("meta_studies", []))
+    q = bibliography_quality_score(records)
+
+    period = f"{min(years.keys())}–{max(years.keys())}" if years else "not available"
+    risk_counts = Counter(r.get("overall_risk", "Unclear") for r in rob_rows)
+
+    text = (
+        f"The final bibliographic dataset consisted of {len(records)} records related to {theme}. "
+        f"The publication period covered {period}. DOI coverage was {m.get('with_doi', 0)} records, while abstract coverage was {m.get('with_abstract', 0)} records. "
+        f"The bibliographic quality score was {q['score']}/100, categorized as {q['label']}.\n\n"
+        f"The PRISMA-oriented screening showed {prisma['records_identified']} identified records, {prisma['records_after_duplicates']} records after deduplication, "
+        f"{prisma['records_screened']} screened records, {prisma['records_excluded']} excluded records, {prisma['full_text_assessed']} records assessed for eligibility, "
+        f"{prisma['studies_included_review']} studies included in the review, and {prisma['studies_included_meta']} studies included in the meta-analysis.\n\n"
+        f"The dominant data sources were: {', '.join([f'{k} ({v})' for k, v in dbs.items()]) if dbs else 'not available'}. "
+        f"The dominant journals or publication venues were: {', '.join([f'{k} ({v})' for k, v in journals.items()]) if journals else 'not available'}. "
+        f"The most frequent keywords were: {', '.join([f'{k} ({v})' for k, v in keywords.items()]) if keywords else 'not available'}.\n\n"
+    )
+
+    if meta_result.get("k", 0):
+        main = meta_result["random"]
+        h = meta_result["heterogeneity"]
+        text += (
+            f"The meta-analysis included {meta_result['k']} studies. The random-effects pooled estimate was {main['pooled']:.4f}, "
+            f"with a 95% confidence interval from {main['ci'][0]:.4f} to {main['ci'][1]:.4f} and p-value of {main['p']:.6f}. "
+            f"Heterogeneity statistics showed Q = {h['Q']:.4f}, tau² = {h['tau2']:.4f}, and I² = {h['I2']:.2f}%. "
+        )
+        if h["I2"] >= 60:
+            text += "This indicates substantial heterogeneity, suggesting that differences in population, intervention, outcome, or study design should be explored through subgroup or sensitivity analysis.\n\n"
+        elif h["I2"] >= 30:
+            text += "This indicates moderate heterogeneity, requiring cautious interpretation of the pooled estimate.\n\n"
+        else:
+            text += "This indicates low heterogeneity, suggesting relatively consistent effects across included studies.\n\n"
+    else:
+        text += (
+            "A quantitative pooled estimate could not yet be produced because the available bibliographic metadata did not contain sufficient effect size and standard error data. "
+            "Therefore, full-text extraction is required before a final meta-analysis can be reported.\n\n"
+        )
+
+    if rob_rows:
+        text += f"Risk of bias assessment produced the following distribution: {', '.join([f'{k} ({v})' for k, v in risk_counts.items()])}. "
+        text += "This result should be considered when interpreting the strength and reliability of the synthesized evidence."
+    else:
+        text += "Risk of bias assessment has not yet been completed and should be performed using full-text information."
+
+    return text
+
+
+def build_review_discussion(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object], rob_rows: List[Dict[str, str]]) -> str:
+    theme = normalize_theme(theme)
+    points = build_discussion_points(theme, records, meta_result)
+    gap_novelty = build_gap_and_novelty(theme, records, meta_result)
+    ev = evidence_strength(records, meta_result, rob_rows)
+
+    return (
+        f"The findings indicate that {theme} is an identifiable and analyzable research area with literature distributed across several publication sources and databases. "
+        f"The bibliographic results help clarify the publication structure, dominant venues, keyword emphasis, and evidence readiness of the field. "
+        f"Several discussion points arise from the analysis: {', '.join(points)}.\n\n"
+        f"The main research gaps include: {', '.join(gap_novelty['gaps'])}. These gaps suggest that future studies should improve metadata completeness, report quantitative outcomes more consistently, and provide sufficient statistical information for evidence synthesis. "
+        f"The novelty of the present review lies in the combination of bibliographic mapping, systematic screening, risk of bias preparation, and meta-analysis readiness assessment.\n\n"
+        f"The strength of evidence is currently categorized as {ev['level']}. {ev['reason']} "
+        f"If a valid meta-analysis is available, the pooled estimate should be interpreted together with heterogeneity, risk of bias, and sensitivity analysis. "
+        f"If meta-analysis is not yet available, the study should be reported as a bibliometric systematic review with a clear extraction plan for future quantitative synthesis."
+    )
+
+
+def build_review_implications(theme: str, meta_result: Dict[str, object]) -> str:
+    theme = normalize_theme(theme)
+    if meta_result.get("k", 0):
+        return (
+            f"The findings have implications for researchers, practitioners, and decision-makers working on {theme}. "
+            f"For researchers, the results identify dominant topics, evidence gaps, and methodological limitations. "
+            f"For practitioners, the pooled evidence can support decisions about whether the studied approach or intervention is likely to produce meaningful effects. "
+            f"For future reviews, the results highlight the need for better standardized reporting of outcome data, effect sizes, and uncertainty estimates."
+        )
+    return (
+        f"The findings provide a structured foundation for future research on {theme}. "
+        f"For researchers, the bibliographic map identifies relevant sources, journals, keywords, and possible research gaps. "
+        f"For future systematic review or meta-analysis, the output provides a ready-to-use extraction format and screening protocol. "
+        f"Practical implications should be interpreted carefully until full-text extraction and quantitative synthesis are completed."
+    )
+
+
+def build_review_limitations_paragraph(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> str:
+    limitations = build_limitations(theme, records, meta_result)
+    return "This review has several limitations. " + " ".join(limitations)
+
+
+def build_review_conclusion(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> str:
+    return build_conclusion_draft(theme, records, meta_result)
+
+
+def build_table_figure_plan(theme: str, records: List[Dict[str, str]], meta_result: Dict[str, object]) -> List[Dict[str, str]]:
+    plan = [
+        {"item": "Table 1", "title": "Search strategy and database sources", "content": "Database, query string, date, number of records."},
+        {"item": "Table 2", "title": "Inclusion and exclusion criteria", "content": "Eligibility criteria for bibliographic review and meta-analysis."},
+        {"item": "Table 3", "title": "Characteristics of included studies", "content": "Author, year, title, journal, country, population, outcome, DOI."},
+        {"item": "Table 4", "title": "Top journals, authors, and keywords", "content": "Bibliographic performance indicators."},
+        {"item": "Table 5", "title": "Risk of bias assessment", "content": "Risk domains and overall risk judgment."},
+        {"item": "Figure 1", "title": "PRISMA flow diagram", "content": "Identification, screening, eligibility, included studies."},
+        {"item": "Figure 2", "title": "Publication trend by year", "content": "Annual publication distribution."},
+        {"item": "Figure 3", "title": "Keyword distribution or science mapping", "content": "Main research themes and keyword frequency."},
+    ]
+    if meta_result.get("k", 0):
+        plan += [
+            {"item": "Figure 4", "title": "Forest plot", "content": "Effect size, confidence interval, and pooled estimate."},
+            {"item": "Figure 5", "title": "Funnel plot / publication bias", "content": "Effect size and standard error distribution."},
+            {"item": "Table 6", "title": "Sensitivity analysis", "content": "Leave-one-out pooled estimates and heterogeneity."},
+        ]
+    return plan
+
+
+def build_journal_review_draft(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> str:
+    theme = normalize_theme(theme)
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    title = build_title_suggestions(theme, records, meta_result)[0]
+    keywords = keyword_distribution(records, 8) if records else {}
+    keyword_text = "; ".join(list(keywords.keys())[:6]) if keywords else theme
+
+    draft = [
+        title.upper(),
+        "",
+        "ABSTRACT",
+        build_review_abstract(theme, records, screened, meta_result),
+        "",
+        f"Keywords: {keyword_text}",
+        "",
+        "1. INTRODUCTION",
+        build_review_introduction(theme, records, meta_result),
+        "",
+        "2. METHODS",
+        build_review_methods(theme, records, screened, meta_result),
+        "",
+        "3. RESULTS",
+        build_review_results(theme, records, screened, meta_result, rob_rows),
+        "",
+        "4. DISCUSSION",
+        build_review_discussion(theme, records, meta_result, rob_rows),
+        "",
+        "5. IMPLICATIONS",
+        build_review_implications(theme, meta_result),
+        "",
+        "6. LIMITATIONS",
+        build_review_limitations_paragraph(theme, records, meta_result),
+        "",
+        "7. CONCLUSION",
+        build_review_conclusion(theme, records, meta_result),
+        "",
+        "TABLE AND FIGURE PLAN",
+    ]
+    for row in build_table_figure_plan(theme, records, meta_result):
+        draft.append(f"- {row['item']}: {row['title']} — {row['content']}")
+
+    draft += [
+        "",
+        "REPORTING CHECKLIST",
+        "- State review objective and research questions.",
+        "- Report databases and search strings.",
+        "- Provide inclusion and exclusion criteria.",
+        "- Present PRISMA flow counts.",
+        "- Explain deduplication and screening process.",
+        "- Describe bibliographic indicators.",
+        "- Describe meta-analysis model and effect size calculation if applicable.",
+        "- Report heterogeneity, sensitivity analysis, publication bias, and risk of bias if applicable.",
+        "- Discuss limitations and implications.",
+        "- Provide data extraction table as supplementary material."
+    ]
+
+    return "\n".join(draft)
+
+
+def build_review_checklist(records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    checks = []
+    checks.append({"section": "Search strategy", "status": "Ready" if records else "Missing", "note": "Run workflow and keep search strings."})
+    checks.append({"section": "Bibliography dataset", "status": "Ready" if len(records) >= 10 else "Needs more data", "note": f"{len(records)} records available."})
+    checks.append({"section": "PRISMA screening", "status": "Ready" if screened else "Missing", "note": "Run screening and export PRISMA table."})
+    checks.append({"section": "Meta-analysis data", "status": "Ready" if len(meta_studies) >= 2 else "Needs extraction", "note": f"{len(meta_studies)} valid studies with effect size."})
+    checks.append({"section": "Risk of bias", "status": "Ready" if rob_rows else "Missing", "note": "Assess risk of bias using full-text."})
+    checks.append({"section": "Sensitivity analysis", "status": "Ready" if len(meta_studies) >= 2 else "Not enough studies", "note": "Leave-one-out requires at least 2 studies."})
+    checks.append({"section": "Publication bias", "status": "Ready" if len(meta_studies) >= 3 else "Not enough studies", "note": "Egger approximation requires at least 3 studies."})
+    checks.append({"section": "Discussion material", "status": "Ready" if records else "Missing", "note": "Generated from bibliographic and meta-analysis results."})
+    return checks
+
+
+def render_journal_review_builder_tab():
+    st.subheader("📝 Jurnal Review Builder")
+    records = st.session_state.theme_records or st.session_state.records
+    screened = st.session_state.screened
+    meta_studies = st.session_state.meta_studies
+    rob_rows = st.session_state.rob_rows
+    theme = st.session_state.last_theme or st.text_input("Tema manual", value="precision livestock farming", key="review_theme_manual")
+
+    if not records:
+        st.info("Belum ada data hasil workflow. Builder tetap bisa membuat kerangka umum, tetapi isi hasil akan jauh lebih kuat setelah Workflow Tema dijalankan.")
+
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    article_type = review_article_type(meta_result)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Jenis Review", "Meta + Biblio" if meta_result.get("k", 0) else "Biblio Review")
+    c2.metric("Referensi", len(records))
+    c3.metric("Studi Meta", meta_result.get("k", 0))
+
+    st.write("### Kesiapan Naskah")
+    checklist = build_review_checklist(records, screened, meta_studies, rob_rows)
+    st.dataframe(checklist, use_container_width=True)
+
+    tab_outline, tab_draft, tab_tables, tab_export = st.tabs(["🧱 Outline", "📄 Draft Artikel", "📊 Tabel/Figure", "📤 Export"])
+
+    with tab_outline:
+        st.write("### Struktur Artikel Review")
+        outline = [
+            "Title",
+            "Abstract",
+            "Keywords",
+            "1. Introduction",
+            "2. Methods",
+            "   2.1 Review design",
+            "   2.2 Search strategy",
+            "   2.3 Inclusion and exclusion criteria",
+            "   2.4 Screening and PRISMA flow",
+            "   2.5 Bibliographic analysis",
+            "   2.6 Meta-analysis and risk of bias",
+            "3. Results",
+            "   3.1 PRISMA results",
+            "   3.2 Publication trends",
+            "   3.3 Dominant journals, authors, and keywords",
+            "   3.4 Bibliographic insight",
+            "   3.5 Meta-analysis results",
+            "   3.6 Risk of bias and sensitivity analysis",
+            "4. Discussion",
+            "5. Implications",
+            "6. Limitations",
+            "7. Conclusion",
+            "References",
+            "Supplementary Materials"
+        ]
+        for x in outline:
+            st.write(f"- {x}")
+
+        st.write("### Alternatif Judul")
+        for x in build_title_suggestions(theme, records, meta_result):
+            st.write(f"- {x}")
+
+        st.write("### Rumusan Masalah")
+        for x in build_research_questions(theme, records, meta_result):
+            st.write(f"- {x}")
+
+    with tab_draft:
+        draft = build_journal_review_draft(theme, records, screened, meta_studies, rob_rows)
+        st.text_area("Draft artikel review", value=draft, height=650)
+
+    with tab_tables:
+        st.write("### Rencana Tabel dan Figure")
+        plan = build_table_figure_plan(theme, records, meta_result)
+        st.dataframe(plan, use_container_width=True)
+
+        st.write("### Template Tabel Karakteristik Studi")
+        study_rows = []
+        for r in records[:50]:
+            study_rows.append({
+                "author_year": f"{r.get('authors','').split(';')[0]} {r.get('year','')}".strip(),
+                "title": r.get("title", ""),
+                "journal": r.get("journal", ""),
+                "database": r.get("database", ""),
+                "doi": r.get("doi", ""),
+                "population": "",
+                "intervention_exposure": "",
+                "comparison": "",
+                "outcome": "",
+                "effect_data_available": "",
+                "notes": "",
+            })
+        st.dataframe(study_rows, use_container_width=True, height=300)
+
+        if "rows_to_xlsx" in globals():
+            st.download_button(
+                "📥 Download Template Karakteristik Studi Excel",
+                data=rows_to_xlsx(study_rows, list(study_rows[0].keys()) if study_rows else ["author_year", "title", "journal", "database", "doi", "population", "intervention_exposure", "comparison", "outcome", "effect_data_available", "notes"], "Karakteristik Studi"),
+                file_name="template_karakteristik_studi.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                disabled=not bool(study_rows),
+            )
+        else:
+            st.download_button(
+                "📥 Download Template Karakteristik Studi CSV",
+                data=safe_csv(study_rows, list(study_rows[0].keys()) if study_rows else ["author_year", "title", "journal", "database", "doi", "population", "intervention_exposure", "comparison", "outcome", "effect_data_available", "notes"]),
+                file_name="template_karakteristik_studi.csv",
+                mime="text/csv",
+                use_container_width=True,
+                disabled=not bool(study_rows),
+            )
+
+    with tab_export:
+        draft = build_journal_review_draft(theme, records, screened, meta_studies, rob_rows)
+        st.download_button(
+            "📥 Download Draft Artikel Review TXT",
+            data=draft.encode("utf-8"),
+            file_name="draft_artikel_review.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+        st.download_button(
+            "📥 Download Checklist Kesiapan Review CSV",
+            data=safe_csv(checklist, ["section", "status", "note"]),
+            file_name="checklist_kesiapan_review.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -2178,6 +2571,7 @@ tabs = st.tabs([
     "📉 Sensitivity & Bias",
     "📌 Insight Akhir",
     "🧩 Bahan Penelitian",
+    "📝 Jurnal Review Builder",
     "📤 Export",
     "📖 Panduan"
 ])
@@ -2533,6 +2927,9 @@ with tabs[7]:
     render_research_materials_tab()
 
 with tabs[8]:
+    render_journal_review_builder_tab()
+
+with tabs[9]:
     st.subheader("📤 Export")
     records = st.session_state.theme_records or st.session_state.records
     screened = st.session_state.screened
@@ -2563,9 +2960,12 @@ with tabs[8]:
         research_materials = build_research_materials_report(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Laporan Akhir TXT", data=final_summary.encode("utf-8"), file_name="laporan_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
         st.download_button("📥 Insight Akhir TXT", data=executive_insight.encode("utf-8"), file_name="insight_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
+
+        review_draft = build_journal_review_draft(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
+        st.download_button("📥 Draft Artikel Review TXT", data=review_draft.encode("utf-8"), file_name="draft_artikel_review.txt", mime="text/plain", use_container_width=True)
         st.download_button("📥 Bahan Penelitian TXT", data=research_materials.encode("utf-8"), file_name="bahan_penelitian_biblio_meta.txt", mime="text/plain", use_container_width=True)
 
-with tabs[9]:
+with tabs[10]:
     st.subheader("📖 Panduan")
     st.markdown("""
 ### Alur yang disarankan
@@ -2579,7 +2979,7 @@ with tabs[9]:
 8. Upload kembali file tersebut ke tab **Meta-Analysis**.
 9. Isi **Risk of Bias**.
 10. Cek **Sensitivity & Bias**.
-11. Buka **Bahan Penelitian** untuk mengambil judul, rumusan masalah, gap, novelty, pembahasan, dan kesimpulan.
+11. Buka **Bahan Penelitian** dan **Jurnal Review Builder** untuk mengambil judul, rumusan masalah, gap, novelty, pembahasan, kesimpulan, serta draft artikel review.
 12. Export laporan dari tab **Export**.
 
 ### Sumber kredibel

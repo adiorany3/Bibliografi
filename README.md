@@ -76,3 +76,21 @@ Ditambahkan tab **Bahan Penelitian** yang menghasilkan:
 - Keterbatasan
 - Draft kesimpulan
 - Insight lengkap siap laporan
+
+## Jurnal Review Builder
+
+Ditambahkan tab **Jurnal Review Builder** untuk mempermudah penyusunan artikel review:
+- Outline artikel review
+- Alternatif judul
+- Rumusan masalah
+- Draft abstrak
+- Draft pendahuluan
+- Draft metode PRISMA
+- Draft hasil bibliografi dan meta-analysis
+- Draft pembahasan
+- Implikasi
+- Keterbatasan
+- Kesimpulan
+- Rencana tabel dan figure
+- Template karakteristik studi
+- Checklist kesiapan naskah
