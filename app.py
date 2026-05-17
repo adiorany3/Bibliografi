@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 import io
-import os
 from datetime import datetime
 
 import pandas as pd
@@ -7,6 +8,7 @@ import plotly.express as px
 import streamlit as st
 
 from utils.bibliography import (
+    COLUMNS,
     dataframe_to_bibtex,
     dataframe_to_ris,
     parse_uploaded_file,
@@ -18,99 +20,114 @@ from utils.bibliography import (
 )
 
 st.set_page_config(
-    page_title="Bibliografi Riset Scopus/WoS/High Impact",
+    page_title="Sistem Bibliografi Riset",
     page_icon="📚",
     layout="wide",
 )
 
-st.title("📚 Sistem Bibliografi Riset Scopus, WoS & Jurnal High Impact")
+
+def safe_secret(name: str, default: str = "") -> str:
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
+def reset_data() -> None:
+    st.session_state.df = standardize_records([])
+
+
+if "df" not in st.session_state:
+    reset_data()
+
+st.title("📚 Sistem Bibliografi Riset Scopus, WoS & High Impact Journal")
 st.caption(
-    "Aplikasi Streamlit Cloud untuk mengumpulkan, membersihkan, memverifikasi awal, "
-    "memfilter, dan mengekspor data bibliografi riset."
+    "Aplikasi untuk mengumpulkan, membersihkan, memfilter, dan mengekspor data bibliografi. "
+    "Validasi Scopus/WoS/impact factor tetap perlu dicek ulang melalui sumber resmi karena sebagian database berlisensi."
 )
 
 with st.sidebar:
     st.header("Pengaturan")
-    email = st.text_input("Email untuk polite API request", value="")
+    email = st.text_input("Email untuk request API publik", value="", placeholder="nama@email.com")
     max_rows = st.slider("Jumlah hasil per sumber", 5, 100, 25, step=5)
     st.divider()
     st.subheader("API Opsional")
-    scopus_key = st.text_input("Scopus API Key", type="password", value=st.secrets.get("SCOPUS_API_KEY", "") if hasattr(st, "secrets") else "")
-    wos_key = st.text_input("WoS Starter API Key", type="password", value=st.secrets.get("WOS_API_KEY", "") if hasattr(st, "secrets") else "")
-    st.info("Scopus dan WoS membutuhkan akses institusi/API resmi. Tanpa key, gunakan Crossref/OpenAlex atau upload file ekspor.")
+    scopus_key = st.text_input("Scopus API Key", type="password", value=safe_secret("SCOPUS_API_KEY"))
+    wos_key = st.text_input("WoS Starter API Key", type="password", value=safe_secret("WOS_API_KEY"))
+    st.info("Tanpa API key, gunakan Crossref/OpenAlex atau upload hasil ekspor Scopus/WoS.")
+    if st.button("Kosongkan Semua Data", use_container_width=True):
+        reset_data()
+        st.success("Data dikosongkan.")
 
-if "df" not in st.session_state:
-    st.session_state.df = standardize_records([])
-
-search_tab, upload_tab, manual_tab, export_tab, guide_tab = st.tabs([
-    "🔎 Cari Literatur", "⬆️ Upload Ekspor", "✍️ Input Manual", "📤 Ekspor", "🚀 Deploy Guide"
-])
+search_tab, upload_tab, manual_tab, dashboard_tab, export_tab, guide_tab = st.tabs(
+    ["🔎 Cari Literatur", "⬆️ Upload Ekspor", "✍️ Input Manual", "📊 Dashboard", "📤 Ekspor", "🚀 Deploy Guide"]
+)
 
 with search_tab:
-    st.subheader("Cari data bibliografi")
+    st.subheader("Cari metadata bibliografi")
     query = st.text_input("Topik / keyword riset", placeholder="Contoh: artificial intelligence education bibliometric")
     sources = st.multiselect(
         "Sumber data",
         ["Crossref", "OpenAlex", "Scopus API", "Web of Science API"],
         default=["Crossref", "OpenAlex"],
     )
-    col_a, col_b = st.columns([1, 3])
-    with col_a:
-        run_search = st.button("Cari & Gabungkan", type="primary", use_container_width=True)
-    with col_b:
-        st.write("Hasil dari tiap sumber akan digabung, dibersihkan, dan dideduplikasi berdasarkan DOI + judul.")
+    run_search = st.button("Cari & Gabungkan", type="primary", use_container_width=True)
 
     if run_search:
         if not query.strip():
             st.warning("Masukkan keyword riset terlebih dahulu.")
+        elif not sources:
+            st.warning("Pilih minimal satu sumber data.")
         else:
             frames = []
             errors = []
             with st.spinner("Mengambil metadata bibliografi..."):
-                if "Crossref" in sources:
+                jobs = [
+                    ("Crossref", lambda: search_crossref(query, max_rows, email)),
+                    ("OpenAlex", lambda: search_openalex(query, max_rows, email)),
+                    ("Scopus API", lambda: search_scopus(query, scopus_key, max_rows)),
+                    ("Web of Science API", lambda: search_wos(query, wos_key, max_rows)),
+                ]
+                for name, fn in jobs:
+                    if name not in sources:
+                        continue
                     try:
-                        frames.append(search_crossref(query, max_rows, email))
+                        result = fn()
+                        if not result.empty:
+                            frames.append(result)
                     except Exception as exc:
-                        errors.append(f"Crossref: {exc}")
-                if "OpenAlex" in sources:
-                    try:
-                        frames.append(search_openalex(query, max_rows, email))
-                    except Exception as exc:
-                        errors.append(f"OpenAlex: {exc}")
-                if "Scopus API" in sources:
-                    try:
-                        frames.append(search_scopus(query, scopus_key, max_rows))
-                    except Exception as exc:
-                        errors.append(f"Scopus: {exc}")
-                if "Web of Science API" in sources:
-                    try:
-                        frames.append(search_wos(query, wos_key, max_rows))
-                    except Exception as exc:
-                        errors.append(f"WoS: {exc}")
+                        errors.append(f"{name}: {exc}")
 
             if frames:
                 combined = pd.concat([st.session_state.df] + frames, ignore_index=True)
-                st.session_state.df = standardize_records(combined.to_dict("records"))
+                st.session_state.df = standardize_records(combined)
                 st.success(f"Berhasil menggabungkan {len(st.session_state.df)} record unik.")
+            else:
+                st.warning("Belum ada data yang berhasil diambil. Coba keyword lain atau upload file ekspor.")
+
             if errors:
                 st.error("Beberapa sumber gagal diakses:\n" + "\n".join(f"- {e}" for e in errors))
 
 with upload_tab:
-    st.subheader("Upload data dari Scopus / WoS / jurnal")
-    st.write("Format yang didukung: CSV, XLSX, BibTeX (.bib), dan RIS (.ris).")
-    uploaded = st.file_uploader("Pilih file ekspor bibliografi", type=["csv", "xlsx", "xls", "bib", "ris"])
-    if uploaded and st.button("Proses File", type="primary"):
+    st.subheader("Upload data dari Scopus / WoS / Zotero / Mendeley")
+    st.write("Format didukung: CSV, XLSX, BibTeX (.bib), dan RIS (.ris).")
+    uploaded = st.file_uploader("Pilih file ekspor bibliografi", type=["csv", "xlsx", "bib", "ris"])
+    if uploaded and st.button("Proses File", type="primary", use_container_width=True):
         try:
             upload_df = parse_uploaded_file(uploaded)
-            combined = pd.concat([st.session_state.df, upload_df], ignore_index=True)
-            st.session_state.df = standardize_records(combined.to_dict("records"))
-            st.success(f"File diproses. Total record unik sekarang: {len(st.session_state.df)}")
+            if upload_df.empty:
+                st.warning("File terbaca, tetapi tidak ditemukan kolom judul/DOI yang valid.")
+            else:
+                combined = pd.concat([st.session_state.df, upload_df], ignore_index=True)
+                st.session_state.df = standardize_records(combined)
+                st.success(f"File diproses. Total record unik sekarang: {len(st.session_state.df)}")
+                st.dataframe(upload_df, use_container_width=True, height=260)
         except Exception as exc:
             st.error(f"Gagal memproses file: {exc}")
 
 with manual_tab:
     st.subheader("Tambah referensi manual")
-    with st.form("manual_form"):
+    with st.form("manual_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
         with c1:
             title = st.text_area("Judul artikel", height=90)
@@ -121,7 +138,7 @@ with manual_tab:
             publisher = st.text_input("Publisher")
             doi = st.text_input("DOI")
             url = st.text_input("URL")
-            database = st.selectbox("Database", ["Scopus", "Web of Science", "SINTA", "Google Scholar", "Manual", "Lainnya"])
+            database = st.selectbox("Database", ["Manual", "Scopus", "Web of Science", "SINTA", "Google Scholar", "Lainnya"])
             impact_factor = st.text_input("Impact Factor / JIF / CiteScore", placeholder="Opsional, contoh: 7.2")
         abstract = st.text_area("Abstrak / catatan", height=90)
         submitted = st.form_submit_button("Tambahkan Referensi")
@@ -139,58 +156,61 @@ with manual_tab:
             "impact_factor": impact_factor,
             "abstract": abstract,
         }])
-        st.session_state.df = standardize_records(pd.concat([st.session_state.df, new_df], ignore_index=True).to_dict("records"))
-        st.success("Referensi manual berhasil ditambahkan.")
+        if new_df.empty:
+            st.warning("Minimal isi judul atau DOI.")
+        else:
+            st.session_state.df = standardize_records(pd.concat([st.session_state.df, new_df], ignore_index=True))
+            st.success("Referensi manual berhasil ditambahkan.")
 
-# Main dashboard
-st.divider()
-df = st.session_state.df.copy()
+with dashboard_tab:
+    st.subheader("Dashboard Bibliografi")
+    df = st.session_state.df.copy()
+    if df.empty:
+        st.info("Belum ada data. Gunakan pencarian, upload file ekspor, atau input manual.")
+    else:
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Referensi", len(df))
+        k2.metric("Dengan DOI", int((df["doi"].astype(str).str.len() > 0).sum()))
+        k3.metric("Scopus/WoS Candidate", int(df["indexing_status"].str.contains("Scopus|Web of Science", case=False, na=False).sum()))
+        k4.metric("High-impact Candidate", int(df["indexing_status"].str.contains("High", case=False, na=False).sum()))
 
-st.subheader("Dashboard Bibliografi")
-if df.empty:
-    st.info("Belum ada data. Gunakan pencarian, upload file ekspor, atau input manual.")
-else:
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Total Referensi", len(df))
-    k2.metric("Dengan DOI", int((df["doi"].astype(str).str.len() > 0).sum()))
-    k3.metric("Scopus/WoS", int(df["indexing_status"].str.contains("Scopus|Web of Science", case=False, na=False).sum()))
-    k4.metric("High-impact Candidate", int(df["indexing_status"].str.contains("High", case=False, na=False).sum()))
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            years = sorted([y for y in df["year"].dropna().astype(str).unique() if y])
+            selected_years = st.multiselect("Filter tahun", years, default=years)
+        with fc2:
+            status_options = sorted(df["indexing_status"].dropna().unique())
+            selected_status = st.multiselect("Filter status indeks", status_options, default=status_options)
+        with fc3:
+            keyword_filter = st.text_input("Cari di judul/jurnal/penulis")
 
-    fc1, fc2, fc3 = st.columns(3)
-    with fc1:
-        years = sorted([y for y in df["year"].dropna().astype(str).unique() if y])
-        selected_years = st.multiselect("Filter tahun", years, default=years)
-    with fc2:
-        status_options = sorted(df["indexing_status"].dropna().unique())
-        selected_status = st.multiselect("Filter status indeks", status_options, default=status_options)
-    with fc3:
-        keyword_filter = st.text_input("Cari di judul/jurnal/penulis")
+        filtered = df.copy()
+        if selected_years:
+            filtered = filtered[filtered["year"].astype(str).isin(selected_years)]
+        if selected_status:
+            filtered = filtered[filtered["indexing_status"].isin(selected_status)]
+        if keyword_filter.strip():
+            mask = (
+                filtered["title"].str.contains(keyword_filter, case=False, na=False)
+                | filtered["journal"].str.contains(keyword_filter, case=False, na=False)
+                | filtered["authors"].str.contains(keyword_filter, case=False, na=False)
+            )
+            filtered = filtered[mask]
 
-    filtered = df.copy()
-    if selected_years:
-        filtered = filtered[filtered["year"].astype(str).isin(selected_years)]
-    if selected_status:
-        filtered = filtered[filtered["indexing_status"].isin(selected_status)]
-    if keyword_filter.strip():
-        mask = (
-            filtered["title"].str.contains(keyword_filter, case=False, na=False)
-            | filtered["journal"].str.contains(keyword_filter, case=False, na=False)
-            | filtered["authors"].str.contains(keyword_filter, case=False, na=False)
-        )
-        filtered = filtered[mask]
+        st.dataframe(filtered[COLUMNS], use_container_width=True, height=430)
 
-    left, right = st.columns([2, 1])
-    with left:
-        st.dataframe(filtered, use_container_width=True, height=420)
-    with right:
-        by_year = filtered.groupby("year", dropna=False).size().reset_index(name="jumlah")
-        by_year = by_year[by_year["year"].astype(str).str.len() > 0]
-        if not by_year.empty:
-            fig = px.bar(by_year.sort_values("year"), x="year", y="jumlah", title="Distribusi Tahun Publikasi")
-            st.plotly_chart(fig, use_container_width=True)
-        by_status = filtered.groupby("indexing_status").size().reset_index(name="jumlah")
-        fig2 = px.pie(by_status, names="indexing_status", values="jumlah", title="Komposisi Status Indeks")
-        st.plotly_chart(fig2, use_container_width=True)
+        c_left, c_right = st.columns(2)
+        with c_left:
+            by_year = filtered.groupby("year", dropna=False).size().reset_index(name="jumlah")
+            by_year = by_year[by_year["year"].astype(str).str.len() > 0]
+            if not by_year.empty:
+                fig = px.bar(by_year.sort_values("year"), x="year", y="jumlah", title="Distribusi Tahun Publikasi")
+                st.plotly_chart(fig, use_container_width=True)
+        with c_right:
+            by_status = filtered.groupby("indexing_status").size().reset_index(name="jumlah")
+            if not by_status.empty:
+                fig2 = px.pie(by_status, names="indexing_status", values="jumlah", title="Komposisi Status Indeks")
+                st.plotly_chart(fig2, use_container_width=True)
 
 with export_tab:
     st.subheader("Ekspor bibliografi")
@@ -199,7 +219,7 @@ with export_tab:
         st.info("Belum ada data untuk diekspor.")
     else:
         st.write(f"Siap mengekspor {len(df_export)} referensi.")
-        csv = df_export.to_csv(index=False).encode("utf-8")
+        csv = df_export.to_csv(index=False).encode("utf-8-sig")
         st.download_button("Download CSV", data=csv, file_name="bibliografi_riset.csv", mime="text/csv")
 
         excel_buffer = io.BytesIO()
@@ -222,19 +242,23 @@ with guide_tab:
     st.subheader("Panduan deploy ke Streamlit Cloud")
     st.markdown(
         """
-1. Upload semua file proyek ini ke repository GitHub.
+1. Upload folder proyek ini ke repository GitHub.
 2. Buka Streamlit Cloud, pilih **New app**.
-3. Pilih repository, branch, dan main file: `app.py`.
-4. Jika memakai API resmi, tambahkan secret berikut pada menu **App settings → Secrets**:
+3. Pilih repository dan branch.
+4. Isi main file path: `app.py`.
+5. Jika memakai API resmi, isi **App settings → Secrets** dengan format:
 
 ```toml
 SCOPUS_API_KEY = "isi_api_key_scopus"
 WOS_API_KEY = "isi_api_key_wos"
 ```
 
-5. Klik **Deploy**.
+6. Klik **Deploy**.
 
-Catatan: validasi impact factor final tetap perlu dicek melalui sumber resmi seperti Journal Citation Reports, Scopus Sources, atau laman jurnal/publisher, karena sebagian data indeks membutuhkan akses berlisensi.
+Catatan penting:
+- Crossref dan OpenAlex bisa berjalan tanpa API key.
+- Scopus dan Web of Science membutuhkan API resmi/akses institusi.
+- Label Scopus/WoS/High Impact pada aplikasi ini adalah **candidate/indikasi awal**, bukan pengganti validasi resmi dari Scopus Sources, Web of Science Master Journal List, atau Journal Citation Reports.
         """
     )
 
