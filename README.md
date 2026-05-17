@@ -81,13 +81,16 @@ Perbaikan:
 - Error `NameError: name 'meta_tab' is not defined` sudah diperbaiki.
 - `app.py` sudah dicek dengan Python compile.
 
+## Meta Otomatis: Format dan Olah Hasil
 
-## Auto Complete Insight v3
-
-Perbaikan:
-- Menambahkan mode pencarian otomatis.
-- Menambahkan DataCite sebagai sumber kredibel.
-- Menghapus CORE dari pencarian otomatis karena sering error/API restricted di Streamlit Cloud.
-- Sumber yang gagal/rate-limited otomatis dilewati tanpa menghentikan aplikasi.
-- Menambahkan insight otomatis: kualitas metadata, temuan utama, rekomendasi, distribusi sumber, dan kelengkapan data.
-- Menambahkan tombol deduplikasi/cleaning ulang.
+Tab **Meta Otomatis** menambahkan alur lengkap:
+1. Mengubah hasil bibliografi menjadi format ekstraksi meta-analysis.
+2. Menyediakan template kosong dan contoh CSV terisi.
+3. Mengolah effect size otomatis dari:
+   - effect_size + standard_error,
+   - SMD/Hedges g dari mean, SD, dan n,
+   - log odds ratio dari tabel 2x2,
+   - log risk ratio,
+   - Fisher z dari korelasi.
+4. Menghasilkan pooled effect, 95% CI, p-value, Q, tau², I², subgroup analysis, forest plot sederhana, dan insight otomatis.
+5. Mengekspor hasil meta-analysis dan laporan insight.

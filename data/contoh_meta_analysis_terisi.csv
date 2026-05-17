@@ -1,0 +1,4 @@
+include,study_id,authors,year,title,journal,doi,group,effect_type,effect_size,standard_error,n_t,mean_t,sd_t,n_c,mean_c,sd_c,event_t,total_t,event_c,total_c,non_event_t,non_event_c,r,n,outcome,population,intervention,comparison,notes
+yes,Smith 2020,Smith,2020,Sample study A,Journal A,,Education,smd,,,,45,82.4,10.5,43,77.1,11.2,,,,,,,,,Learning outcome,Students,Digital learning,Conventional,Raw SMD
+yes,Lee 2021,Lee,2021,Sample study B,Journal B,,Education,,0.52,0.15,,,,,,,,,,,,,,,,Achievement,Students,AI learning,Traditional,Generic effect
+yes,Garcia 2022,Garcia,2022,Sample study C,Journal C,,Health,,0.28,0.10,,,,,,,,,,,,,,,,Health outcome,Patients,Intervention,Control,Generic effect
