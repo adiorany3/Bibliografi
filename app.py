@@ -5506,6 +5506,198 @@ def render_tables_figures_inside_panduan():
             )
 
 
+
+# =========================================================
+# Enhanced Figure Templates & Captions
+# =========================================================
+def build_figure_templates(records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]]) -> List[Dict[str, str]]:
+    theme = st.session_state.get("last_theme", "") or "the selected topic"
+    prisma = prisma_counts(st.session_state.get("found_total", 0) or len(records), records, screened, meta_studies) if "prisma_counts" in globals() else {}
+    years = year_distribution(records) if records else {}
+    keywords = keyword_distribution(records, 15) if records else {}
+
+    return [
+        {
+            "figure": "Figure 1",
+            "title": "PRISMA flow diagram",
+            "core_content": "Identification, screening, eligibility, included studies.",
+            "data_needed": "records_identified, duplicates_removed, records_screened, records_excluded, full_text_assessed, studies_included_review, studies_included_meta",
+            "auto_data_status": "Available" if prisma else "Need screening data",
+            "caption_template": (
+                "Figure 1. PRISMA flow diagram showing the identification, screening, eligibility assessment, "
+                "and final inclusion of studies related to "
+                f"{theme}. The diagram reports the number of records identified, duplicates removed, records screened, "
+                "full-text articles assessed, excluded records with reasons, and studies included in the review/meta-analysis."
+            ),
+            "interpretation_template": (
+                "The PRISMA flow clarifies the transparency of the study selection process. A large reduction from identified "
+                "records to included studies is expected because bibliographic searches retrieve duplicates, unrelated records, "
+                "non-empirical papers, and studies without extractable quantitative data."
+            ),
+            "qlevel_note": "For Q-level journals, include exclusion reasons and make the screening process reproducible."
+        },
+        {
+            "figure": "Figure 2",
+            "title": "Publication trend by year",
+            "core_content": "Annual publication distribution.",
+            "data_needed": "year and number_of_publications",
+            "auto_data_status": "Available" if years else "Need valid publication years",
+            "caption_template": (
+                "Figure 2. Annual publication distribution of studies related to "
+                f"{theme}. The figure shows the number of publications per year and indicates the development of research interest over time."
+            ),
+            "interpretation_template": (
+                "An increasing trend suggests growing scholarly attention to the topic, whereas fluctuations may reflect changes in technology, "
+                "database coverage, funding priorities, or publication practices. Recent growth should be interpreted together with database coverage."
+            ),
+            "qlevel_note": "Use this figure to justify research urgency and development of the field."
+        },
+        {
+            "figure": "Figure 3",
+            "title": "Keyword distribution or science mapping",
+            "core_content": "Main research themes and keyword frequency.",
+            "data_needed": "keywords, frequency, optional cluster/theme label",
+            "auto_data_status": "Available" if keywords else "Need keyword metadata",
+            "caption_template": (
+                "Figure 3. Keyword distribution and thematic structure of studies related to "
+                f"{theme}. The figure highlights the most frequent keywords and main research themes emerging from the bibliographic dataset."
+            ),
+            "interpretation_template": (
+                "Dominant keywords indicate the conceptual focus of the field. Keyword clusters can reveal major themes, methodological approaches, "
+                "technology groups, populations, outcomes, and potential gaps for future research."
+            ),
+            "qlevel_note": "For stronger Q-level presentation, complement keyword frequency with co-word network or thematic clustering when possible."
+        },
+    ]
+
+
+def build_prisma_figure_data(records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    prisma = prisma_counts(st.session_state.get("found_total", 0) or len(records), records, screened, meta_studies) if "prisma_counts" in globals() else {}
+    order = [
+        ("Records identified", "records_identified"),
+        ("Duplicates removed", "duplicates_removed"),
+        ("Records after duplicates", "records_after_duplicates"),
+        ("Records screened", "records_screened"),
+        ("Records excluded", "records_excluded"),
+        ("Full-text assessed", "full_text_assessed"),
+        ("Studies included in review", "studies_included_review"),
+        ("Studies included in meta-analysis", "studies_included_meta"),
+    ]
+    rows = []
+    for label, key in order:
+        rows.append({"stage": label, "value": prisma.get(key, 0), "notes": ""})
+    return rows
+
+
+def build_publication_trend_data(records: List[Dict[str, str]]) -> List[Dict[str, object]]:
+    years = year_distribution(records) if records else {}
+    if not years:
+        return [{"year": "", "number_of_publications": "", "notes": "No valid year data yet."}]
+    return [{"year": y, "number_of_publications": c, "notes": ""} for y, c in sorted(years.items())]
+
+
+def build_keyword_mapping_data(records: List[Dict[str, str]]) -> List[Dict[str, object]]:
+    keywords = keyword_distribution(records, 30) if records else {}
+    if not keywords:
+        return [{"keyword": "", "frequency": "", "theme_cluster": "", "notes": "No keyword metadata yet."}]
+    rows = []
+    for k, v in keywords.items():
+        rows.append({"keyword": k, "frequency": v, "theme_cluster": "", "notes": ""})
+    return rows
+
+
+def build_figure_caption_report(records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]]) -> str:
+    lines = ["FIGURE CAPTION AND INTERPRETATION REPORT", ""]
+    for fig in build_figure_templates(records, screened, meta_studies):
+        lines += [
+            f"{fig['figure']}: {fig['title']}",
+            f"Core content: {fig['core_content']}",
+            f"Data needed: {fig['data_needed']}",
+            f"Auto data status: {fig['auto_data_status']}",
+            "",
+            "Caption:",
+            fig["caption_template"],
+            "",
+            "Interpretation:",
+            fig["interpretation_template"],
+            "",
+            "Q-level note:",
+            fig["qlevel_note"],
+            "",
+        ]
+    return "\n".join(lines)
+
+
+def render_enhanced_figure_templates_inside_panduan():
+    st.divider()
+    st.subheader("🖼️ Figure Templates")
+    st.caption("Template figure untuk PRISMA flow, publication trend, dan keyword/science mapping.")
+
+    records = st.session_state.get("theme_records", []) or st.session_state.get("records", [])
+    screened = st.session_state.get("screened", [])
+    meta_studies = st.session_state.get("meta_studies", [])
+
+    tab_templates, tab_data, tab_caption = st.tabs(["🧾 Template Figure", "📊 Data Figure", "✍️ Caption & Interpretasi"])
+
+    with tab_templates:
+        templates = build_figure_templates(records, screened, meta_studies)
+        st.dataframe(templates, use_container_width=True, height=420)
+
+    with tab_data:
+        selected = st.selectbox(
+            "Pilih data figure",
+            [
+                "Figure 1 - PRISMA flow diagram",
+                "Figure 2 - Publication trend by year",
+                "Figure 3 - Keyword distribution or science mapping",
+            ],
+            key="selected_figure_data_template"
+        )
+
+        if selected.startswith("Figure 1"):
+            rows = build_prisma_figure_data(records, screened, meta_studies)
+            fields = ["stage", "value", "notes"]
+            filename = "figure_1_prisma_flow_data.xlsx"
+        elif selected.startswith("Figure 2"):
+            rows = build_publication_trend_data(records)
+            fields = ["year", "number_of_publications", "notes"]
+            filename = "figure_2_publication_trend_data.xlsx"
+        else:
+            rows = build_keyword_mapping_data(records)
+            fields = ["keyword", "frequency", "theme_cluster", "notes"]
+            filename = "figure_3_keyword_mapping_data.xlsx"
+
+        st.dataframe(rows, use_container_width=True, height=420)
+
+        if "rows_to_xlsx" in globals():
+            st.download_button(
+                "📥 Download Data Figure Excel",
+                data=rows_to_xlsx(rows, fields, selected[:31]),
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        else:
+            st.download_button(
+                "📥 Download Data Figure CSV",
+                data=safe_csv(rows, fields),
+                file_name=filename.replace(".xlsx", ".csv"),
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    with tab_caption:
+        report = build_figure_caption_report(records, screened, meta_studies)
+        st.text_area("Caption dan interpretasi figure", value=report, height=560)
+        st.download_button(
+            "📥 Download Figure Caption Report TXT",
+            data=report.encode("utf-8"),
+            file_name="figure_caption_interpretation_report.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -5951,6 +6143,9 @@ with tabs[14]:
         executive_insight = build_executive_insight(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         research_materials = build_research_materials_report(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Laporan Akhir TXT", data=final_summary.encode("utf-8"), file_name="laporan_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
+
+        figure_caption_report = build_figure_caption_report(records, screened, meta_studies)
+        st.download_button("📥 Figure Caption Report TXT", data=figure_caption_report.encode("utf-8"), file_name="figure_caption_interpretation_report.txt", mime="text/plain", use_container_width=True)
 
         tables_figures_report = build_tables_figures_report(st.session_state.last_theme or "precision livestock farming", records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Tables & Figures Plan Report TXT", data=tables_figures_report.encode("utf-8"), file_name="tables_figures_plan_report.txt", mime="text/plain", use_container_width=True)

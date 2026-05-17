@@ -225,3 +225,13 @@ Ditambahkan modul **Tables & Figures Plan**:
 - Figure 2 Publication trend by year
 - Figure 3 Keyword distribution/science mapping
 - Template Excel untuk tabel dan data figure
+
+## Enhanced Figure Templates
+
+Ditambahkan:
+- Figure 1 PRISMA flow: Identification, screening, eligibility, included studies
+- Figure 2 Publication trend: Annual publication distribution
+- Figure 3 Keyword/science mapping: Main research themes and keyword frequency
+- Data Excel untuk tiap figure
+- Caption dan interpretasi otomatis
+- Q-level notes untuk figure
