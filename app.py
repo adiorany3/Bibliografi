@@ -1009,6 +1009,270 @@ def extract_effect_from_metadata(record: Dict[str, str]):
     return None
 
 
+
+# =========================================================
+# Excel XLSX utilities - no external dependency
+# =========================================================
+def excel_col_letter(n: int) -> str:
+    result = ""
+    while n:
+        n, rem = divmod(n - 1, 26)
+        result = chr(65 + rem) + result
+    return result
+
+
+def xml_escape(value: object) -> str:
+    text = "" if value is None else str(value)
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def sheet_name_safe(name: str) -> str:
+    name = re.sub(r"[\[\]\:\*\?\/\\]", " ", clean(name))[:31].strip()
+    return name or "Sheet1"
+
+
+def rows_to_xlsx(rows: List[Dict[str, object]], fieldnames: List[str], sheet_name: str = "Data") -> bytes:
+    # Create a simple Excel .xlsx workbook from rows using only stdlib.
+    extra = []
+    for row in rows:
+        for key in row.keys():
+            if key not in fieldnames and key not in extra:
+                extra.append(key)
+    headers = fieldnames + extra
+    sheet_name = sheet_name_safe(sheet_name)
+
+    data = [headers]
+    for row in rows:
+        data.append([row.get(h, "") for h in headers])
+
+    string_index = {}
+    strings = []
+
+    def get_string_id(value: object) -> int:
+        text = "" if value is None else str(value)
+        if text not in string_index:
+            string_index[text] = len(strings)
+            strings.append(text)
+        return string_index[text]
+
+    sheet_rows = []
+    for r_idx, row in enumerate(data, 1):
+        cells = []
+        for c_idx, value in enumerate(row, 1):
+            ref = f"{excel_col_letter(c_idx)}{r_idx}"
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                cells.append(f'<c r="{ref}"><v>{value}</v></c>')
+            else:
+                sid = get_string_id(value)
+                style = ' s="1"' if r_idx == 1 else ""
+                cells.append(f'<c r="{ref}" t="s"{style}><v>{sid}</v></c>')
+        sheet_rows.append(f'<row r="{r_idx}">{"".join(cells)}</row>')
+
+    cols_xml = []
+    sample_rows = data[: min(len(data), 101)]
+    for c_idx, h in enumerate(headers, 1):
+        max_len = len(str(h))
+        for row in sample_rows[1:]:
+            max_len = max(max_len, len(str(row[c_idx - 1] if c_idx - 1 < len(row) else "")))
+        width = min(max(max_len + 2, 10), 42)
+        cols_xml.append(f'<col min="{c_idx}" max="{c_idx}" width="{width}" customWidth="1"/>')
+
+    sheet_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+ <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+ <cols>{"".join(cols_xml)}</cols>
+ <sheetData>{"".join(sheet_rows)}</sheetData>
+ <autoFilter ref="A1:{excel_col_letter(len(headers))}{max(1, len(data))}"/>
+</worksheet>"""
+
+    shared_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{len(strings)}" uniqueCount="{len(strings)}">
+{''.join(f'<si><t xml:space="preserve">{xml_escape(s)}</t></si>' for s in strings)}
+</sst>"""
+
+    workbook_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+ <sheets><sheet name="{xml_escape(sheet_name)}" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"""
+
+    styles_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+ <fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font></fonts>
+ <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill></fills>
+ <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+ <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+ <cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs>
+ <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"""
+
+    rels_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+ <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+
+    wb_rels_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+ <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+ <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+ <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>"""
+
+    content_types_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+ <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+ <Default Extension="xml" ContentType="application/xml"/>
+ <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+ <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+ <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+ <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>"""
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types_xml)
+        z.writestr("_rels/.rels", rels_xml)
+        z.writestr("xl/workbook.xml", workbook_xml)
+        z.writestr("xl/_rels/workbook.xml.rels", wb_rels_xml)
+        z.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+        z.writestr("xl/styles.xml", styles_xml)
+        z.writestr("xl/sharedStrings.xml", shared_xml)
+    return out.getvalue()
+
+
+def xlsx_to_rows(data: bytes) -> List[Dict[str, str]]:
+    # Read first worksheet of a simple .xlsx workbook using stdlib.
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(io.BytesIO(data), "r") as z:
+        shared = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+            for si in root.findall("m:si", ns):
+                texts = []
+                for t in si.findall(".//m:t", ns):
+                    texts.append(t.text or "")
+                shared.append("".join(texts))
+
+        sheet_path = "xl/worksheets/sheet1.xml"
+        if sheet_path not in z.namelist():
+            candidates = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+            if not candidates:
+                return []
+            sheet_path = sorted(candidates)[0]
+
+        root = ET.fromstring(z.read(sheet_path))
+        rows = []
+        for row in root.findall(".//m:row", ns):
+            row_values = {}
+            max_col = 0
+            for c in row.findall("m:c", ns):
+                ref = c.attrib.get("r", "")
+                col_letters = re.sub(r"\d+", "", ref)
+                col_num = 0
+                for ch in col_letters:
+                    col_num = col_num * 26 + (ord(ch.upper()) - 64)
+                max_col = max(max_col, col_num)
+                v = c.find("m:v", ns)
+                value = "" if v is None or v.text is None else v.text
+                if c.attrib.get("t") == "s":
+                    idx = int(value) if value.isdigit() else -1
+                    value = shared[idx] if 0 <= idx < len(shared) else ""
+                elif c.attrib.get("t") == "inlineStr":
+                    t = c.find(".//m:t", ns)
+                    value = "" if t is None or t.text is None else t.text
+                row_values[col_num] = value
+            if max_col:
+                rows.append([row_values.get(i, "") for i in range(1, max_col + 1)])
+
+    if not rows:
+        return []
+    headers = [clean(h) for h in rows[0]]
+    result = []
+    for row in rows[1:]:
+        if not any(clean(x) for x in row):
+            continue
+        result.append({headers[i]: row[i] if i < len(row) else "" for i in range(len(headers)) if headers[i]})
+    return result
+
+
+def parse_meta_rows(rows: List[Dict[str, object]]) -> Tuple[List[Dict[str, object]], int]:
+    # Same logic as parse_meta_csv, but accepts rows loaded from XLSX.
+    studies, skipped = [], 0
+    for i, row in enumerate(rows, 1):
+        lower = {str(k).strip().lower(): v for k, v in row.items()}
+        include = clean(lower.get("include", "yes")).lower()
+        if include in ["no", "n", "0", "false", "exclude", "tidak"]:
+            continue
+
+        study_id = clean(lower.get("study_id") or lower.get("study") or lower.get("title") or f"Study {i}")
+        year = year_from_text(lower.get("year", ""))
+        group = clean(lower.get("group") or lower.get("subgroup") or "Overall") or "Overall"
+        effect_type = clean(lower.get("effect_type") or lower.get("type") or "").lower()
+        notes = clean(lower.get("notes") or "")
+
+        yi = safe_float(lower.get("effect_size") or lower.get("yi") or lower.get("effect") or lower.get("g") or lower.get("d") or lower.get("logor") or lower.get("logrr") or lower.get("z"))
+        se = safe_float(lower.get("standard_error") or lower.get("se") or lower.get("sei"))
+        vi = safe_float(lower.get("variance") or lower.get("var") or lower.get("vi"))
+
+        if yi is None or (se is None and vi is None):
+            if effect_type in ["smd", "hedges", "hedges_g", "cohen_d", "d", "g"] or clean(lower.get("mean_t")):
+                yi, se = compute_smd(lower.get("n_t"), lower.get("mean_t"), lower.get("sd_t"), lower.get("n_c"), lower.get("mean_c"), lower.get("sd_c"))
+                effect_type = "SMD/Hedges g"
+            elif effect_type in ["or", "log_or", "odds_ratio", "logor"] or clean(lower.get("non_event_t")):
+                yi, se = compute_log_or(lower.get("event_t"), lower.get("non_event_t"), lower.get("event_c"), lower.get("non_event_c"))
+                effect_type = "log(OR)"
+            elif effect_type in ["rr", "risk_ratio", "log_rr", "logrr"] or (clean(lower.get("total_t")) and clean(lower.get("total_c"))):
+                yi, se = compute_log_rr(lower.get("event_t"), lower.get("total_t"), lower.get("event_c"), lower.get("total_c"))
+                effect_type = "log(RR)"
+            elif effect_type in ["correlation", "r", "fisher_z"] or clean(lower.get("r")):
+                yi, se = compute_fisher_z(lower.get("r"), lower.get("n"))
+                effect_type = "Fisher z"
+
+        if se is None and vi is not None and vi > 0:
+            se = math.sqrt(vi)
+
+        if yi is None or se is None or se <= 0:
+            skipped += 1
+            continue
+
+        studies.append({
+            "study_id": study_id,
+            "year": year,
+            "group": group,
+            "effect_type": effect_type or "Generic",
+            "effect_size": yi,
+            "standard_error": se,
+            "variance": se ** 2,
+            "notes": notes,
+        })
+    return studies, skipped
+
+
+def parse_bibliography_upload(data: bytes, name: str) -> List[Dict[str, str]]:
+    name = name.lower()
+    if name.endswith(".xlsx"):
+        return standardize(xlsx_to_rows(data))
+    if name.endswith(".csv"):
+        return parse_csv_bytes(data)
+    if name.endswith(".ris"):
+        return parse_ris(data.decode("utf-8", errors="replace"))
+    return parse_bibtex(data.decode("utf-8", errors="replace"))
+
+
+def parse_meta_upload(data: bytes, name: str) -> Tuple[List[Dict[str, object]], int]:
+    name = name.lower()
+    if name.endswith(".xlsx"):
+        return parse_meta_rows(xlsx_to_rows(data))
+    return parse_meta_csv(data)
+
+
 # =========================================================
 # Exporters and reports
 # =========================================================
@@ -1578,7 +1842,7 @@ with tabs[0]:
                     for e in errors:
                         st.write(f"- {e}")
             if not auto_meta:
-                st.info("Effect size biasanya tidak tersedia di metadata. Download format meta-analysis di tab Meta-Analysis, isi dari full-text, lalu upload kembali.")
+                st.info("Effect size biasanya tidak tersedia di metadata. Download format Excel meta-analysis di tab Meta-Analysis, isi dari full-text, lalu upload kembali.")
 
     st.divider()
     if st.session_state.theme_records:
@@ -1594,17 +1858,12 @@ with tabs[1]:
     upload_col, manual_col = st.columns(2)
 
     with upload_col:
-        uploaded = st.file_uploader("Upload CSV/BibTeX/RIS", type=["csv", "bib", "ris", "txt"])
+        uploaded = st.file_uploader("Upload Excel/CSV/BibTeX/RIS", type=["xlsx", "csv", "bib", "ris", "txt"])
         if uploaded and st.button("Proses Upload Bibliografi"):
             data = uploaded.getvalue()
             name = uploaded.name.lower()
             try:
-                if name.endswith(".csv"):
-                    parsed = parse_csv_bytes(data)
-                elif name.endswith(".ris"):
-                    parsed = parse_ris(data.decode("utf-8", errors="replace"))
-                else:
-                    parsed = parse_bibtex(data.decode("utf-8", errors="replace"))
+                parsed = parse_bibliography_upload(data, name)
                 add_records(parsed)
                 st.success(f"Berhasil membaca {len(parsed)} record.")
             except Exception as exc:
@@ -1703,10 +1962,10 @@ with tabs[3]:
     st.write("### Format Ekstraksi")
     meta_format = bibliographic_to_meta_format(records, st.session_state.last_theme)
     st.download_button(
-        "📥 Download Format Meta-Analysis dari Bibliografi",
-        data=safe_csv(meta_format, META_EXTRACTION_COLUMNS),
-        file_name="format_meta_analysis.csv",
-        mime="text/csv",
+        "📥 Download Format Meta-Analysis Excel",
+        data=rows_to_xlsx(meta_format, META_EXTRACTION_COLUMNS, "Format Meta"),
+        file_name="format_meta_analysis.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
         disabled=not bool(meta_format),
     )
@@ -1715,24 +1974,29 @@ with tabs[3]:
         {"include": "yes", "study_id": "Smith 2020", "authors": "Smith", "year": "2020", "title": "Sample A", "journal": "Journal A", "doi": "", "group": "Education", "effect_type": "smd", "effect_size": "", "standard_error": "", "n_t": "45", "mean_t": "82.4", "sd_t": "10.5", "n_c": "43", "mean_c": "77.1", "sd_c": "11.2", "event_t": "", "total_t": "", "event_c": "", "total_c": "", "non_event_t": "", "non_event_c": "", "r": "", "n": "", "outcome": "Learning", "population": "Students", "intervention": "AI", "comparison": "Traditional", "notes": "sample"},
         {"include": "yes", "study_id": "Lee 2021", "authors": "Lee", "year": "2021", "title": "Sample B", "journal": "Journal B", "doi": "", "group": "Education", "effect_type": "", "effect_size": "0.52", "standard_error": "0.15", "n_t": "", "mean_t": "", "sd_t": "", "n_c": "", "mean_c": "", "sd_c": "", "event_t": "", "total_t": "", "event_c": "", "total_c": "", "non_event_t": "", "non_event_c": "", "r": "", "n": "", "outcome": "Achievement", "population": "Students", "intervention": "AI", "comparison": "Control", "notes": "sample"},
     ]
-    st.download_button("📄 Download Contoh Terisi", data=safe_csv(sample_rows, META_EXTRACTION_COLUMNS), file_name="contoh_meta_analysis_terisi.csv", mime="text/csv")
+    st.download_button(
+        "📄 Download Contoh Terisi Excel",
+        data=rows_to_xlsx(sample_rows, META_EXTRACTION_COLUMNS, "Contoh Meta"),
+        file_name="contoh_meta_analysis_terisi.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
-    uploaded_meta = st.file_uploader("Upload CSV meta-analysis yang sudah diisi", type=["csv"])
+    uploaded_meta = st.file_uploader("Upload Excel/CSV meta-analysis yang sudah diisi", type=["xlsx", "csv"])
     if uploaded_meta and st.button("Proses Meta-Analysis", type="primary"):
-        studies, skipped = parse_meta_csv(uploaded_meta.getvalue())
+        studies, skipped = parse_meta_upload(uploaded_meta.getvalue(), uploaded_meta.name)
         st.session_state.meta_studies = studies
         st.session_state.rob_rows = build_rob_from_meta(studies)
         st.success(f"Studi valid: {len(studies)}. Dilewati: {skipped}.")
 
     if st.button("Gunakan Sample Meta-Analysis"):
-        studies, skipped = parse_meta_csv(safe_csv(sample_rows, META_EXTRACTION_COLUMNS))
+        studies, skipped = parse_meta_rows(sample_rows)
         st.session_state.meta_studies = studies
         st.session_state.rob_rows = build_rob_from_meta(studies)
         st.success("Sample dimuat.")
 
     studies = st.session_state.meta_studies
     if not studies:
-        st.info("Belum ada effect size/SE valid. Isi dan upload format meta-analysis.")
+        st.info("Belum ada effect size/SE valid. Isi dan upload format Excel meta-analysis.")
     else:
         result = run_meta(studies)
         subgroup = subgroup_meta(studies)
@@ -1858,14 +2122,21 @@ with tabs[7]:
 
     col1, col2 = st.columns(2)
     with col1:
-        st.download_button("📥 Bibliografi CSV", data=to_csv(records), file_name="bibliografi.csv", mime="text/csv", use_container_width=True, disabled=not bool(records))
+        st.download_button("📥 Bibliografi Excel", data=rows_to_xlsx(records, COLUMNS, "Bibliografi"), file_name="bibliografi.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, disabled=not bool(records))
         st.download_button("📥 Bibliografi BibTeX", data=to_bibtex(records).encode("utf-8"), file_name="bibliografi.bib", mime="text/plain", use_container_width=True, disabled=not bool(records))
-        st.download_button("📥 Screening CSV", data=safe_csv(screened, SCREENING_COLUMNS), file_name="screening_prisma.csv", mime="text/csv", use_container_width=True, disabled=not bool(screened))
-        st.download_button("📥 Risk of Bias CSV", data=safe_csv(st.session_state.rob_rows, ROB_COLUMNS), file_name="risk_of_bias.csv", mime="text/csv", use_container_width=True, disabled=not bool(st.session_state.rob_rows))
+        st.download_button("📥 Screening PRISMA Excel", data=rows_to_xlsx(screened, SCREENING_COLUMNS, "Screening PRISMA"), file_name="screening_prisma.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, disabled=not bool(screened))
+        st.download_button("📥 Risk of Bias Excel", data=rows_to_xlsx(st.session_state.rob_rows, ROB_COLUMNS, "Risk of Bias"), file_name="risk_of_bias.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, disabled=not bool(st.session_state.rob_rows))
     with col2:
         meta_format = bibliographic_to_meta_format(records, st.session_state.last_theme)
-        st.download_button("📥 Format Meta-Analysis CSV", data=safe_csv(meta_format, META_EXTRACTION_COLUMNS), file_name="format_meta_analysis.csv", mime="text/csv", use_container_width=True, disabled=not bool(meta_format))
-        st.download_button("📥 Hasil Meta CSV", data=safe_csv(meta_result.get("studies", []), list(meta_result.get("studies", [{}])[0].keys()) if meta_result.get("studies") else META_EXTRACTION_COLUMNS), file_name="hasil_meta_analysis.csv", mime="text/csv", use_container_width=True, disabled=not bool(meta_result.get("studies")))
+        st.download_button("📥 Format Meta-Analysis Excel", data=rows_to_xlsx(meta_format, META_EXTRACTION_COLUMNS, "Format Meta"), file_name="format_meta_analysis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, disabled=not bool(meta_format))
+        st.download_button(
+            "📥 Hasil Meta Excel",
+            data=rows_to_xlsx(meta_result.get("studies", []), list(meta_result.get("studies", [{}])[0].keys()) if meta_result.get("studies") else META_EXTRACTION_COLUMNS, "Hasil Meta"),
+            file_name="hasil_meta_analysis.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            disabled=not bool(meta_result.get("studies"))
+        )
         st.download_button("📥 Laporan Bibliografi TXT", data=build_biblio_report(records, st.session_state.last_theme).encode("utf-8"), file_name="laporan_bibliografi.txt", mime="text/plain", use_container_width=True, disabled=not bool(records))
         executive_insight = build_executive_insight(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Laporan Akhir TXT", data=final_summary.encode("utf-8"), file_name="laporan_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
@@ -1880,7 +2151,7 @@ with tabs[8]:
 3. Jalankan pencarian otomatis.
 4. Cek hasil di **Bibliografi**.
 5. Cek screening dan PRISMA di **PRISMA & Screening**.
-6. Download format meta-analysis dari tab **Meta-Analysis**.
+6. Download format Excel meta-analysis dari tab **Meta-Analysis**.
 7. Isi effect size/SE atau data mentah dari full-text artikel.
 8. Upload kembali file tersebut ke tab **Meta-Analysis**.
 9. Isi **Risk of Bias**.

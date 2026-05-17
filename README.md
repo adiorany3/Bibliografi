@@ -39,3 +39,17 @@ Ditambahkan tab **Insight Akhir**:
 - Ringkasan risk of bias
 - Rekomendasi tindakan otomatis
 - Insight naratif siap pakai untuk laporan
+
+## Excel XLSX
+
+Versi ini mengubah format utama dari CSV menjadi Excel `.xlsx` agar lebih mudah dibuka, dibaca, diedit, dan ditambahkan di Microsoft Excel/Google Sheets/WPS Office.
+
+Yang tersedia dalam `.xlsx`:
+- Bibliografi
+- Screening PRISMA
+- Risk of Bias
+- Format Meta-Analysis
+- Contoh Meta-Analysis Terisi
+- Hasil Meta-Analysis
+
+Upload juga sudah mendukung `.xlsx` untuk bibliografi dan meta-analysis.
