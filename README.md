@@ -53,3 +53,10 @@ Yang tersedia dalam `.xlsx`:
 - Hasil Meta-Analysis
 
 Upload juga sudah mendukung `.xlsx` untuk bibliografi dan meta-analysis.
+
+## Fix Excel Export
+
+Perbaikan:
+- Menambahkan `import zipfile` ke `app.py`.
+- Error `NameError: name 'zipfile' is not defined` sudah diperbaiki.
+- Export/import Excel `.xlsx` tetap berjalan tanpa dependency tambahan.

@@ -7,6 +7,7 @@ import json
 import math
 import re
 import xml.etree.ElementTree as ET
+import zipfile
 from collections import Counter, defaultdict
 from typing import Dict, Iterable, List, Tuple
 
