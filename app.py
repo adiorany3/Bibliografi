@@ -1720,8 +1720,8 @@ with st.sidebar:
             except Exception as exc:
                 st.error(f"Sample gagal dimuat: {exc}")
 
-search_tab, upload_tab, manual_tab, data_tab, insights_tab, mapping_tab, method_tab, export_tab, source_tab, guide_tab = st.tabs([
-    "🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📈 Insight", "🧭 Science Mapping", "🧪 Metodologi", "📤 Ekspor", "🌐 Sumber", "🚀 Panduan"
+search_tab, upload_tab, manual_tab, data_tab, insights_tab, mapping_tab, method_tab, meta_tab, export_tab, source_tab, guide_tab = st.tabs([
+    "🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📈 Insight", "🧭 Science Mapping", "🧪 Metodologi", "🧪 Meta-Analytic", "📤 Ekspor", "🌐 Sumber", "🚀 Panduan"
 ])
 
 with search_tab:

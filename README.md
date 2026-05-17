@@ -73,3 +73,10 @@ Fitur:
 - Ekspor CSV dan laporan TXT
 
 Catatan: fitur ini memakai Python standard library agar tetap ringan di Streamlit Cloud. Untuk publikasi akademik, validasi kembali hasil dengan software statistik khusus seperti R metafor/meta, RevMan, JASP, Jamovi, atau Stata.
+
+## Fix v2 Meta-Analytic
+
+Perbaikan:
+- `meta_tab` sekarang sudah ikut dideklarasikan di `st.tabs()`.
+- Error `NameError: name 'meta_tab' is not defined` sudah diperbaiki.
+- `app.py` sudah dicek dengan Python compile.
