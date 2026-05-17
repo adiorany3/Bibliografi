@@ -42,14 +42,14 @@ WOS_HINTS = [
 ]
 
 SOURCE_HELP = {
-    "Crossref": "Metadata DOI lintas publisher akademik.",
-    "OpenAlex": "Database open bibliographic besar untuk karya ilmiah.",
-    "PubMed": "Literatur biomedis dari NCBI/NLM.",
-    "Semantic Scholar": "Indeks AI2 untuk paper dan metadata akademik.",
-    "DOAJ": "Directory of Open Access Journals.",
+    "Crossref": "Metadata DOI lintas publisher akademik; stabil untuk pencarian umum.",
+    "OpenAlex": "Database open bibliographic besar untuk karya ilmiah; kuat untuk multi-disiplin.",
+    "PubMed": "Literatur biomedis dari NCBI/NLM; sangat kredibel untuk kesehatan dan life sciences.",
+    "Semantic Scholar": "Indeks AI2 untuk paper dan metadata akademik; kadang rate-limited, aplikasi akan skip otomatis jika gagal.",
+    "DOAJ": "Directory of Open Access Journals; cocok untuk open access dan jurnal terkurasi.",
     "arXiv": "Preprint kredibel untuk CS, matematika, fisika, statistik, dan bidang terkait.",
-    "Europe PMC": "Literatur biomedis dan life sciences.",
-    "CORE": "Agregator open access repositories. Kadang membutuhkan API key/akses tertentu.",
+    "Europe PMC": "Literatur biomedis dan life sciences; pelengkap PubMed/PMC.",
+    "DataCite": "Metadata DOI untuk dataset, preprint, software, report, dan output riset non-jurnal.",
 }
 
 
@@ -396,6 +396,8 @@ def search_semantic_scholar(query: str, rows: int, email: str) -> List[Dict[str,
     }
     headers = {"User-Agent": "BibliografiStreamlit/6.0"}
     r = requests.get("https://api.semanticscholar.org/graph/v1/paper/search", params=params, headers=headers, timeout=25)
+    if r.status_code in (403, 429, 500, 502, 503):
+        return []
     r.raise_for_status()
 
     records = []
@@ -423,9 +425,12 @@ def search_semantic_scholar(query: str, rows: int, email: str) -> List[Dict[str,
 
 
 def search_doaj(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    """Search DOAJ articles. Fails gracefully if DOAJ endpoint is unavailable."""
     params = {"pageSize": min(rows, 100)}
     url = f"https://doaj.org/api/search/articles/{requests.utils.quote(query)}"
     r = requests.get(url, params=params, timeout=25)
+    if r.status_code in (403, 404, 429, 500, 502, 503):
+        return []
     r.raise_for_status()
 
     records = []
@@ -433,12 +438,21 @@ def search_doaj(query: str, rows: int, email: str) -> List[Dict[str, str]]:
         bib = item.get("bibjson", {})
         authors = [a.get("name", "") for a in bib.get("author", [])]
         journal = bib.get("journal", {}) or {}
-        links = bib.get("link", []) or []
+
         url_value = ""
-        for link in links:
+        for link in bib.get("link", []) or []:
             if isinstance(link, dict) and link.get("url"):
                 url_value = link.get("url")
                 break
+
+        doi = ""
+        for ident in bib.get("identifier", []) or []:
+            if isinstance(ident, dict):
+                ident_type = str(ident.get("type", "")).lower()
+                ident_value = ident.get("id", "")
+                if ident_type == "doi" or doi_from_text(ident_value):
+                    doi = doi_from_text(ident_value) or ident_value
+                    break
 
         records.append({
             "title": bib.get("title", ""),
@@ -446,7 +460,7 @@ def search_doaj(query: str, rows: int, email: str) -> List[Dict[str, str]]:
             "year": bib.get("year", ""),
             "journal": journal.get("title", ""),
             "publisher": bib.get("publisher", "") or journal.get("publisher", ""),
-            "doi": bib.get("identifier", [{}])[0].get("id", "") if bib.get("identifier") else "",
+            "doi": doi,
             "url": url_value,
             "database": "DOAJ",
             "abstract": bib.get("abstract", ""),
@@ -455,7 +469,6 @@ def search_doaj(query: str, rows: int, email: str) -> List[Dict[str, str]]:
         })
 
     return standardize(records)
-
 
 def search_arxiv(query: str, rows: int, email: str) -> List[Dict[str, str]]:
     params = {
@@ -578,6 +591,58 @@ def search_core(query: str, rows: int, email: str) -> List[Dict[str, str]]:
     return standardize(records)
 
 
+
+def search_datacite(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    """Search DataCite DOI metadata for datasets, reports, preprints, software, and other research outputs."""
+    params = {"query": query, "page[size]": min(rows, 100)}
+    headers = {"User-Agent": f"BibliografiStreamlit/AutoComplete (mailto:{email or 'example@example.com'})"}
+    r = requests.get("https://api.datacite.org/dois", params=params, headers=headers, timeout=25)
+    if r.status_code in (403, 429, 500, 502, 503):
+        return []
+    r.raise_for_status()
+
+    records = []
+    for item in r.json().get("data", []):
+        attr = item.get("attributes", {}) or {}
+
+        titles = attr.get("titles") or []
+        title = ""
+        if titles and isinstance(titles[0], dict):
+            title = titles[0].get("title", "")
+
+        creators = []
+        for c in attr.get("creators", []) or []:
+            name = c.get("name") or " ".join(filter(None, [c.get("givenName", ""), c.get("familyName", "")]))
+            if name:
+                creators.append(name)
+
+        subjects = []
+        for s in attr.get("subjects", []) or []:
+            if isinstance(s, dict) and s.get("subject"):
+                subjects.append(s.get("subject"))
+
+        container = ""
+        if attr.get("container"):
+            container = attr.get("container", {}).get("title", "")
+
+        records.append({
+            "title": title,
+            "authors": creators,
+            "year": attr.get("publicationYear", ""),
+            "journal": container or attr.get("types", {}).get("resourceTypeGeneral", ""),
+            "publisher": attr.get("publisher", ""),
+            "doi": attr.get("doi", ""),
+            "url": attr.get("url", ""),
+            "database": "DataCite",
+            "abstract": clean(attr.get("descriptions", [{}])[0].get("description", "")) if attr.get("descriptions") else "",
+            "keywords": "; ".join(subjects[:10]),
+            "document_type": attr.get("types", {}).get("resourceTypeGeneral", ""),
+            "notes": "DataCite DOI metadata",
+        })
+
+    return standardize(records)
+
+
 SOURCE_FUNCTIONS = {
     "Crossref": search_crossref,
     "OpenAlex": search_openalex,
@@ -586,7 +651,7 @@ SOURCE_FUNCTIONS = {
     "DOAJ": search_doaj,
     "arXiv": search_arxiv,
     "Europe PMC": search_europe_pmc,
-    "CORE": search_core,
+    "DataCite": search_datacite,
 }
 
 
@@ -1678,6 +1743,169 @@ Study A,correlation,0.32,120
 """)
 
 
+
+# =========================
+# Automatic Cleaning, Source Selection, and Insight
+# =========================
+def source_recommendations_for_query(query: str) -> List[str]:
+    q = (query or "").lower()
+    biomedical_terms = [
+        "health", "medical", "medicine", "clinical", "patient", "covid", "disease",
+        "therapy", "hospital", "nursing", "biomedical", "pharmacy", "public health"
+    ]
+    cs_terms = [
+        "artificial intelligence", "machine learning", "deep learning", "algorithm",
+        "computer", "software", "data mining", "neural", "nlp", "robot"
+    ]
+    open_access_terms = ["open access", "journal", "publication", "bibliometric"]
+    dataset_terms = ["dataset", "data", "repository", "software", "preprint"]
+
+    sources = ["Crossref", "OpenAlex", "Semantic Scholar"]
+    if any(t in q for t in biomedical_terms):
+        sources += ["PubMed", "Europe PMC"]
+    if any(t in q for t in cs_terms):
+        sources += ["arXiv"]
+    if any(t in q for t in open_access_terms):
+        sources += ["DOAJ"]
+    if any(t in q for t in dataset_terms):
+        sources += ["DataCite"]
+
+    # Add stable broad sources as fallback
+    for s in ["PubMed", "DOAJ", "arXiv", "Europe PMC", "DataCite"]:
+        if s not in sources:
+            sources.append(s)
+
+    return [s for s in sources if s in SOURCE_FUNCTIONS]
+
+
+def metadata_quality_score(records: List[Dict[str, str]]) -> Dict[str, object]:
+    if not records:
+        return {"score": 0, "grade": "N/A", "items": []}
+
+    total = len(records)
+    checks = {
+        "DOI": sum(1 for r in records if r.get("doi")) / total,
+        "Tahun": sum(1 for r in records if r.get("year")) / total,
+        "Penulis": sum(1 for r in records if r.get("authors")) / total,
+        "Jurnal/Sumber": sum(1 for r in records if r.get("journal")) / total,
+        "Abstrak": sum(1 for r in records if r.get("abstract")) / total,
+        "Keywords": sum(1 for r in records if r.get("keywords")) / total,
+    }
+    weights = {"DOI": 20, "Tahun": 15, "Penulis": 15, "Jurnal/Sumber": 15, "Abstrak": 20, "Keywords": 15}
+    score = sum(checks[k] * weights[k] for k in checks)
+    if score >= 85:
+        grade = "Sangat baik"
+    elif score >= 70:
+        grade = "Baik"
+    elif score >= 55:
+        grade = "Cukup"
+    else:
+        grade = "Perlu dilengkapi"
+    return {
+        "score": round(score, 1),
+        "grade": grade,
+        "items": [(k, round(v * 100, 1)) for k, v in checks.items()],
+    }
+
+
+def generate_automatic_insights(records: List[Dict[str, str]]) -> Dict[str, object]:
+    if not records:
+        return {"summary": "Belum ada data.", "bullets": [], "actions": []}
+
+    metrics = get_basic_metrics(records)
+    years = year_distribution(records)
+    authors = author_distribution(records, 10)
+    journals = count_by(records, "journal", 10)
+    keywords = keyword_distribution(records, 10)
+    dbs = count_by(records, "database", 20)
+    quality = metadata_quality_score(records)
+    coauth = coauthorship_summary(records)
+
+    period = "belum diketahui"
+    if years:
+        period = f"{min(years.keys())}–{max(years.keys())}"
+
+    top_source = next(iter(dbs.items()), ("Unknown", 0))
+    top_author = next(iter(authors.items()), ("Belum ada", 0))
+    top_journal = next(iter(journals.items()), ("Belum ada", 0))
+    top_keyword = next(iter(keywords.items()), ("Belum ada", 0))
+
+    bullets = [
+        f"Dataset berisi {metrics['total']} dokumen dengan rentang publikasi {period}.",
+        f"Sumber dominan adalah {top_source[0]} ({top_source[1]} dokumen).",
+        f"Penulis paling sering muncul: {top_author[0]} ({top_author[1]} publikasi).",
+        f"Jurnal/sumber paling dominan: {top_journal[0]} ({top_journal[1]} publikasi).",
+        f"Keyword paling sering muncul: {top_keyword[0]} ({top_keyword[1]} kali).",
+        f"Kualitas metadata: {quality['grade']} ({quality['score']}/100).",
+        f"Kolaborasi penulis: {metrics['collab_rate']:.1f}% dokumen multi-author; network density {coauth['density']:.3f}.",
+    ]
+
+    actions = []
+    doi_pct = (metrics["with_doi"] / metrics["total"] * 100) if metrics["total"] else 0
+    abs_pct = (metrics["with_abstract"] / metrics["total"] * 100) if metrics["total"] else 0
+    kw_pct = (metrics["with_keywords"] / metrics["total"] * 100) if metrics["total"] else 0
+
+    if doi_pct < 70:
+        actions.append("Lengkapi DOI agar deduplikasi, citation tracking, dan ekspor bibliografi lebih akurat.")
+    if abs_pct < 60:
+        actions.append("Tambahkan abstrak untuk memperkuat co-word analysis dan thematic interpretation.")
+    if kw_pct < 60:
+        actions.append("Lengkapi keyword supaya pemetaan tema dan emerging topic lebih jelas.")
+    if metrics["need"] > metrics["total"] * 0.4:
+        actions.append("Validasi indeks Scopus/WoS/JCR/SJR karena banyak metadata masih berstatus Needs verification.")
+    if len(records) < 100:
+        actions.append("Untuk bibliometric analysis yang kuat, kumpulkan lebih banyak data; jurnal menyarankan dataset besar ketika scope kajian luas.")
+    if not actions:
+        actions.append("Dataset sudah cukup rapi; lanjutkan performance analysis, science mapping, dan interpretasi klaster.")
+
+    return {
+        "summary": f"Analisis otomatis menunjukkan dataset {quality['grade'].lower()} dengan fokus utama pada {top_keyword[0]}.",
+        "bullets": bullets,
+        "actions": actions,
+        "quality": quality,
+        "source_distribution": dbs,
+    }
+
+
+def render_automatic_insight_panel(records: List[Dict[str, str]]) -> None:
+    insight = generate_automatic_insights(records)
+    st.write("### 🤖 Insight Otomatis")
+    st.success(insight["summary"])
+
+    left, right = st.columns(2)
+    with left:
+        st.write("**Temuan utama:**")
+        for item in insight["bullets"]:
+            st.write(f"- {item}")
+
+    with right:
+        st.write("**Rekomendasi otomatis:**")
+        for item in insight["actions"]:
+            st.info(item)
+
+    if "quality" in insight:
+        st.write("**Kelengkapan metadata:**")
+        qdata = {name: pct for name, pct in insight["quality"]["items"]}
+        st.bar_chart(qdata)
+
+
+def run_sources_automatically(query: str, rows: int, email: str, selected_sources: List[str]) -> tuple[List[Dict[str, str]], List[str], Dict[str, int]]:
+    found = []
+    errors = []
+    counts = {}
+    for source in selected_sources:
+        try:
+            results = SOURCE_FUNCTIONS[source](query, rows, email)
+            found += results
+            counts[source] = len(results)
+        except Exception as exc:
+            # Source is skipped automatically, not breaking the whole system.
+            errors.append(f"{source}: {str(exc)[:160]}")
+            counts[source] = 0
+    return found, errors, counts
+
+
+
 # =========================
 # Streamlit UI
 # =========================
@@ -1725,22 +1953,45 @@ search_tab, upload_tab, manual_tab, data_tab, insights_tab, mapping_tab, method_
 ])
 
 with search_tab:
-    st.subheader("🔎 Cari Metadata Bibliografi dari Banyak Sumber")
+    st.subheader("🔎 Cari Metadata Bibliografi Otomatis")
     query = st.text_input("Topik/keyword riset", placeholder="Contoh: artificial intelligence education bibliometric")
 
-    default_sources = ["Crossref", "OpenAlex", "PubMed", "Semantic Scholar", "DOAJ", "arXiv", "Europe PMC"]
-    sources = st.multiselect(
-        "Pilih sumber kredibel",
-        list(SOURCE_FUNCTIONS.keys()),
-        default=default_sources,
-        help="Semakin banyak sumber dipilih, hasil makin banyak tetapi proses lebih lama."
-    )
+    auto_mode = st.checkbox("🤖 Mode otomatis: pilih sumber paling relevan dan skip sumber yang gagal", value=True)
+    default_sources = ["Crossref", "OpenAlex", "PubMed", "Semantic Scholar", "DOAJ", "arXiv", "Europe PMC", "DataCite"]
 
-    with st.expander("Keterangan sumber"):
+    recommended_sources = source_recommendations_for_query(query) if query.strip() else default_sources
+
+    if auto_mode:
+        sources = st.multiselect(
+            "Sumber yang akan digunakan otomatis",
+            list(SOURCE_FUNCTIONS.keys()),
+            default=[s for s in recommended_sources if s in SOURCE_FUNCTIONS],
+            help="Aplikasi memilih sumber kredibel, menjalankan pencarian, dan melewati sumber yang error/rate limit."
+        )
+    else:
+        sources = st.multiselect(
+            "Pilih sumber manual",
+            list(SOURCE_FUNCTIONS.keys()),
+            default=default_sources,
+            help="Semakin banyak sumber dipilih, hasil makin banyak tetapi proses lebih lama."
+        )
+
+    with st.expander("Keterangan sumber kredibel"):
         for src, desc in SOURCE_HELP.items():
             st.write(f"**{src}:** {desc}")
+        st.warning("Sumber yang sering error/bermasalah seperti CORE API dihapus dari pencarian otomatis. Scopus/WoS tetap melalui upload ekspor resmi.")
 
-    if st.button("Cari & gabungkan semua sumber", type="primary", use_container_width=True):
+    col_search1, col_search2 = st.columns(2)
+
+    with col_search1:
+        run_button = st.button("🤖 Cari otomatis & gabungkan", type="primary", use_container_width=True)
+
+    with col_search2:
+        if st.button("🧹 Bersihkan/deduplikasi ulang data", use_container_width=True):
+            st.session_state.records = standardize(st.session_state.records)
+            st.success(f"Data dibersihkan. Total unik: {len(st.session_state.records)}")
+
+    if run_button:
         if not query.strip():
             st.warning("Keyword masih kosong.")
         elif not sources:
@@ -1748,6 +1999,7 @@ with search_tab:
         else:
             found = []
             errors = []
+            counts = {}
 
             progress = st.progress(0)
             status_box = st.empty()
@@ -1757,19 +2009,30 @@ with search_tab:
                 try:
                     results = SOURCE_FUNCTIONS[source](query, rows, email)
                     found += results
+                    counts[source] = len(results)
                     st.write(f"✅ {source}: {len(results)} record")
                 except Exception as exc:
-                    errors.append(f"{source}: {exc}")
-                    st.write(f"⚠️ {source}: gagal/terbatas")
+                    errors.append(f"{source}: {str(exc)[:160]}")
+                    counts[source] = 0
+                    st.write(f"⏭️ {source}: dilewati otomatis karena gagal/rate limit")
                 progress.progress(i / len(sources))
 
             add_records(found)
             status_box.success(f"Selesai. Data baru terbaca: {len(found)}. Total record unik: {len(st.session_state.records)}")
 
+            if counts:
+                st.write("### Ringkasan hasil per sumber")
+                st.bar_chart(counts)
+
             if errors:
-                with st.expander("Detail sumber yang gagal"):
+                with st.expander("Sumber yang dilewati otomatis"):
+                    st.write("Sumber berikut tidak menghentikan aplikasi dan otomatis dilewati:")
                     for e in errors:
                         st.write(f"- {e}")
+
+            if st.session_state.records:
+                render_automatic_insight_panel(st.session_state.records)
+
 
 with upload_tab:
     st.subheader("⬆️ Upload File Bibliografi")
@@ -1813,7 +2076,7 @@ with manual_tab:
             url = st.text_input("URL")
             database = st.selectbox(
                 "Database",
-                ["Manual", "Scopus", "Web of Science", "SINTA", "Google Scholar", "Crossref", "OpenAlex", "PubMed", "Semantic Scholar", "DOAJ", "arXiv", "Europe PMC", "CORE", "Lainnya"]
+                ["Manual", "Scopus", "Web of Science", "SINTA", "Google Scholar", "Crossref", "OpenAlex", "PubMed", "Semantic Scholar", "DOAJ", "arXiv", "Europe PMC", "DataCite", "Dimensions/Lens", "Lainnya"]
             )
             impact = st.text_input("Impact Factor/JIF/CiteScore")
 
@@ -2033,6 +2296,10 @@ with insights_tab:
                     st.write(f"- {a} ↔ {b}: {count} kali")
             else:
                 st.info("Belum ada pasangan kolaborasi.")
+
+        st.divider()
+
+        render_automatic_insight_panel(records)
 
         st.divider()
 
@@ -2269,6 +2536,7 @@ with source_tab:
 - **Journal Citation Reports/JCR**: gunakan untuk validasi Impact Factor resmi.
 - **Scimago/SJR**: gunakan untuk validasi quartile dan SJR.
 - **Dimensions/Lens**: bisa digunakan lewat ekspor CSV/RIS/BibTeX.
+- **CORE API**: dihapus dari pencarian otomatis karena sering membutuhkan akses/API key dan dapat memicu error di Streamlit Cloud.
 """)
 
     st.warning("Catatan: status Scopus/WoS/high impact di aplikasi ini adalah kandidat berbasis metadata, bukan verifikasi resmi.")

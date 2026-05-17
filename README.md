@@ -80,3 +80,14 @@ Perbaikan:
 - `meta_tab` sekarang sudah ikut dideklarasikan di `st.tabs()`.
 - Error `NameError: name 'meta_tab' is not defined` sudah diperbaiki.
 - `app.py` sudah dicek dengan Python compile.
+
+
+## Auto Complete Insight v3
+
+Perbaikan:
+- Menambahkan mode pencarian otomatis.
+- Menambahkan DataCite sebagai sumber kredibel.
+- Menghapus CORE dari pencarian otomatis karena sering error/API restricted di Streamlit Cloud.
+- Sumber yang gagal/rate-limited otomatis dilewati tanpa menghentikan aplikasi.
+- Menambahkan insight otomatis: kualitas metadata, temuan utama, rekomendasi, distribusi sumber, dan kelengkapan data.
+- Menambahkan tombol deduplikasi/cleaning ulang.
