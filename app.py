@@ -261,22 +261,41 @@ def add_records(new_records: List[Dict[str, str]]) -> None:
     st.session_state.records = standardize(st.session_state.records + new_records)
 
 
-st.set_page_config(page_title=APP_TITLE, page_icon="📚", layout="wide")
+st.set_page_config(page_title=APP_TITLE, page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 if "records" not in st.session_state:
     st.session_state.records = []
+if "sort_year" not in st.session_state:
+    st.session_state.sort_year = "desc"
 
 st.title("📚 Sistem Bibliografi Riset")
-st.caption("Untuk mengelola bibliografi dari Crossref, OpenAlex, ekspor Scopus/WoS, dan kandidat jurnal high-impact. Validasi indeks resmi tetap dilakukan manual melalui Scopus/WoS/JCR/SJR.")
+st.caption("Kelola bibliografi dari Crossref, OpenAlex, ekspor Scopus/WoS, dan identifikasi jurnal high-impact. Validasi indeks resmi tetap dilakukan manual di Scopus/WoS/JCR/SJR.")
 
 with st.sidebar:
-    st.header("Pengaturan")
+    st.header("⚙️ Pengaturan")
     email = st.text_input("Email opsional untuk API publik", placeholder="nama@email.com")
     rows = st.slider("Jumlah hasil per sumber", 5, 100, 20, 5)
-    if st.button("Reset data", use_container_width=True):
-        st.session_state.records = []
-        st.success("Data dikosongkan.")
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔄 Baru", use_container_width=True):
+            st.session_state.records = []
+            st.success("Data dikosongkan.")
+    with col2:
+        if st.button("📥 Muat Sample", use_container_width=True):
+            try:
+                import os
+                sample_path = os.path.join(os.path.dirname(__file__), "data", "sample_references.csv")
+                if os.path.exists(sample_path):
+                    with open(sample_path, 'rb') as f:
+                        parsed = parse_csv_bytes(f.read())
+                    add_records(parsed)
+                    st.success(f"Dimuat {len(parsed)} referensi sampel.")
+                else:
+                    st.error("File sampel tidak ditemukan.")
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-search_tab, upload_tab, manual_tab, data_tab, export_tab, guide_tab = st.tabs(["🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📤 Ekspor", "🚀 Panduan"])
+search_tab, upload_tab, manual_tab, data_tab, insights_tab, export_tab, guide_tab = st.tabs(["🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📈 Insight", "📤 Ekspor", "🚀 Panduan"])
 
 with search_tab:
     st.subheader("Cari metadata bibliografi")
@@ -345,37 +364,381 @@ with manual_tab:
         st.success("Data ditambahkan.")
 
 with data_tab:
-    st.subheader("Data bibliografi")
+    st.subheader("📋 Data Bibliografi")
     records = st.session_state.records
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total", len(records))
-    m2.metric("Dengan DOI", sum(1 for r in records if r.get("doi")))
-    m3.metric("Scopus/WoS/High-impact", sum(1 for r in records if "candidate" in r.get("indexing_status", "").lower() or "impact" in r.get("indexing_status", "").lower()))
-    keyword = st.text_input("Filter kata kunci")
-    shown = records
-    if keyword.strip():
-        q = keyword.lower()
-        shown = [r for r in records if q in json.dumps(r, ensure_ascii=False).lower()]
-    st.dataframe(shown, use_container_width=True, height=460)
+    
+    if not records:
+        st.info("Belum ada data. Gunakan tab Cari, Upload, atau Manual untuk menambah referensi.")
+    else:
+        # Metrics
+        with_doi = sum(1 for r in records if r.get("doi"))
+        high_impact = sum(1 for r in records if "candidate" in r.get("indexing_status", "").lower() or "impact" in r.get("indexing_status", "").lower())
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("📚 Total", len(records))
+        col2.metric("🔗 Dengan DOI", with_doi)
+     insights_tab:
+    st.subheader("📈 Analisis & Insight")
+    records = st.session_state.records
+    
+    if not records:
+        st.info("Belum ada data untuk dianalisis.")
+    else:
+        st.write(f"**Total referensi:** {len(records)}")
+        st.divider()
+        
+        # Create columns for visualizations
+        viz_col1, viz_col2 = st.columns(2)
+        
+        with viz_col1:
+            st.write("### 📅 Distribusi Publikasi per Tahun")
+            # Year distribution
+            years = {}
+            for r in records:
+                year = r.get("year", "Unknown")
+                if year and year != "Unknown":
+                    years[year] = years.get(year, 0) + 1
+            
+            if years:
+                years_sorted = dict(sorted(years.items(), key=lambda x: x[0]))
+                st.bar_chart(years_sorted)
+                st.caption(f"Tahun terbaru: {max(years.keys())}, Tahun terlama: {min(years.keys())}")
+            else:
+                st.info("Tidak ada data tahun.")
+        
+        with viz_col2:
+            st.write("### 🗂️ Distribusi Database")
+            # Database distribution
+            databases = {}
+            for r in records:
+                db = r.get("database", "Manual")
+                databases[db] = databases.get(db, 0) + 1
+            
+            if databases:
+                st.bar_chart(databases)
+            else:
+                st.info("Tidak ada data database.")
+        
+        st.divider()
+        
+        # Status distribution
+        col_status1, col_status2 = st.columns(2)
+        
+        with col_status1:
+            st.write("### ✅ Status Verifikasi Indeks")
+            status_data = {}
+            for r in records:
+                status = r.get("indexing_status", "Unknown")
+                # Group by category
+                if "Scopus" in status:
+                    status_data["Scopus"] = status_data.get("Scopus", 0) + 1
+                elif "Web of Science" in status:
+                    status_data["WoS"] = status_data.get("WoS", 0) + 1
+                elif "High-impact" in status:
+                    status_data["High-Impact"] = status_data.get("High-Impact", 0) + 1
+                elif "Needs verification" in status:
+                    status_data["Perlu Verifikasi"] = status_data.get("Perlu Verifikasi", 0) + 1
+            
+            if status_data:
+                st.bar_chart(status_data)
+            else:
+                st.info("Tidak ada data status.")
+        
+        with col_status2:
+            st.write("### 📊 Statistik")
+            with_doi = sum(1 for r in records if r.get("doi"))
+            with_abstract = sum(1 for r in records if r.get("abstract"))
+            with_keywords = sum(1 for r in records if r.get("keywords"))
+            
+            stats = {
+                "Dengan DOI": with_doi,
+                "Dengan Abstrak": with_abstract,
+                "Dengan Keywords": with_keywords,
+            }
+            
+            for label, count in stats.items():
+                pct = (count / len(records) * 100) if records else 0
+                st.metric(label, f"{count} ({pct:.1f}%)")
+        
+        st.divider()
+        
+        # Top authors and journals
+        col_top1, col_top2 = st.columns(2)
+        
+        with col_top1:
+            st.write("### 👥 Penulis Terbanyak")
+            author_count = {}
+            for r in records:
+                authors = r.get("authors", "").split(";")
+                for author in authors:
+                    author = author.strip()
+                    if author:
+                        author_count[author] = author_count.get(author, 0) + 1
+            
+            if author_count:
+                top_authors = sorted(author_count.items(), key=lambda x: x[1], reverse=True)[:10]
+                author_dict = {k: v for k, v in top_authors}
+                st.bar_chart(author_dict)
+            else:
+                st.info("Tidak ada data penulis.")
+        
+        with col_top2:
+            st.write("### 📰 Jurnal Terbanyak")
+            journal_count = {}
+            for r in records:
+                journal = r.get("journal", "").strip()
+                if journal:
+                    journal_count[journal[:40]] = journal_count.get(journal[:40], 0) + 1
+            
+            if journal_count:
+                top_journals = sorted(journal_count.items(), key=lambda x: x[1], reverse=True)[:10]
+                journal_dict = {k: v for k, v in top_journals}
+                st.bar_chart(journal_dict)
+            else:
+                st.info("Tidak ada data jurnal.")
+        
+        st.divider()
+        st.write("### 💡 Rekomendasi")
+        recommendations = []
+        
+        doi_pct = (with_doi / len(records) * 100) if records else 0
+        if doi_pct < 70:
+            recommendations.append(f"⚠️ Hanya {doi_pct:.0f}% referensi memiliki DOI. Tambahkan DOI untuk kelengkapan metadata.")
+        
+        if sum(1 for r in records if "Needs verification" in r.get("indexing_status", "")) > len(records) * 0.5:
+            recommendations.append("⚠️ Lebih dari 50% referensi belum terverifikasi indeksnya. Validasi manual di Scopus/WoS.")
+        
+        abstract_pct = (with_abstract / len(records) * 100) if records else 0
+        if abstract_pct < 50:
+            recommendations.append(f"💡 Lengkapi abstrak ({abstract_pct:.0f}%) untuk analisis lebih mendalam.")
+        
+        if recommendations:
+            for rec in recommendations:
+                st.info(rec)
+        else:
+            st.success("✅ Dataset Anda sudah bagus! Lanjutkan dengan validasi indeks resmi.")
+
+with    col3.metric("⭐ High-Impact", high_impact)
+        col4.metric("✅ Terverifikasi", sum(1 for r in records if r.get("indexing_status") and r.get("indexing_status") != "Needs verification"))
+        
+        st.divider()
+        
+        # Filters and sorting
+        col_filter1, col_filter2, col_filter3 = st.columns([2, 1, 1])
+        
+        with col_filter1:
+            keyword = st.text_input("🔍 Cari (judul, penulis, jurnal...)")
+        
+        with col_filter2:
+            sort_option = st.selectbox("Urutkan", 
+                ["Terbaru dulu", "Terlama dulu", "Judul A-Z", "Database"],
+                key="sort_select")
+        
+        with col_filter3:
+            status_filter = st.selectbox("Status", 
+                ["Semua", "Verified", "Needs Verify"],
+                key="status_filter")
+        
+        # Apply filters
+        shown = records
+        
+        # Keyword filter
+        if keyword.strip():
+            q = keyword.lower()
+            shown = [r for r in shown if q in json.dumps(r, ensure_ascii=False).lower()]
+        
+        # Status filter
+        if status_filter == "Verified":
+            shown = [r for r in shown if "candidate" in r.get("indexing_status", "").lower() or "impact" in r.get("indexing_status", "").lower()]
+        elif status_filter == "Needs Verify":
+            shown = [r for r in shown if r.get("indexing_status", "") == "Needs verification"]
+        
+        # Apply sorting
+        if sort_option == "Terbaru dulu":
+            shown = sorted(shown, key=lambda x: (x.get("year", "0") or "0"), reverse=True)
+        elif sort_option == "Terlama dulu":
+            shown = sorted(shown, key=lambda x: (x.get("year", "0") or "0"))
+        elif sort_option == "Judul A-Z":
+            shown = sorted(shown, key=lambda x: x.get("title", "").lower())
+        elif sort_option == "Database":
+            shown = sorted(shown, key=lambda x: x.get("database", ""))
+        
+        st.write(f"Menampilkan **{len(shown)} dari {len(records)}** referensi")
+        
+        # Display table with better formatting
+        if shown:
+            display_cols = ["title", "authors", "year", "journal", "database", "indexing_status"]
+            display_records = []
+            for r in shown:
+                display_records.append({
+                    "Judul": r.get("title", "")[:60] + ("..." if len(r.get("title", "")) > 60 else ""),
+                    "Penulis": r.get("authors", "")[:40] + ("..." if len(r.get("authors", "")) > 40 else ""),
+                    "Tahun": r.get("year", ""),
+                    "Jurnal": r.get("journal", "")[:30] + ("..." if len(r.get("journal", "")) > 30 else ""),
+                    "Database": r.get("database", ""),
+                    "Status": r.get("indexing_status", "").split(";")[0] if r.get("indexing_status") else "—"
+                })
+            
+            st.dataframe(display_records, use_container_width=True, height=500)
+        
+        # Detail view option
+        st.divider()
+        if st.checkbox("🔍 Lihat detail referensi"):
+            col_detail1, col_detail2 = st.columns([1, 3])
+            with col_detail1:
+                idx = st.selectbox("Pilih referensi", range(len(shown)), format_func=lambda i: shown[i].get("title", f"Ref {i+1}")[:50])
+            
+            if idx is not None and idx < len(shown):
+                record = shown[idx]
+                with col_detail2:
+                    st.write("### Detail Lengkap")
+                    
+                    detail_cols = st.columns(2)
+                    with detail_cols[0]:
+                        st.write(f"**Judul:** {record.get('title', '—')}")
+                        st.write(f"**Penulis:** {record.get('authors', '—')}")
+                        st.write(f"**Tahun:** {record.get('year', '—')}")
+                        st.write(f"**Jurnal:** {record.get('journal', '—')}")
+                    
+                    with detail_cols[1]:
+                        st.write(f"**Database:** {record.get('database', '—')}")
+                        st.write(f"**DOI:** {record.get('doi', '—')}")
+                        st.write(f"**Impact Factor:** {record.get('impact_factor', '—')}")
+                        st.write(f"**Status:** {record.get('indexing_status', '—')}")
+                    
+                    if record.get("abstract"):
+                        st.write("**Abstrak:**")
+                        st.write(record.get("abstract"))
+                    
+                    if record.get("keywords"):
+                        st.write("**Keywords:** " + record.get("keywords", ""))
 
 with export_tab:
-    st.subheader("Ekspor")
+    st.subheader("📤 Ekspor Data")
     records = st.session_state.records
+    
     if not records:
         st.info("Belum ada data untuk diekspor.")
     else:
-        st.download_button("Download CSV", data=to_csv(records), file_name="bibliografi_riset.csv", mime="text/csv")
-        st.download_button("Download BibTeX", data=to_bibtex(records).encode("utf-8"), file_name="bibliografi_riset.bib", mime="text/plain")
-        st.download_button("Download RIS", data=to_ris(records).encode("utf-8"), file_name="bibliografi_riset.ris", mime="text/plain")
-        st.download_button("Download JSON", data=json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8"), file_name="bibliografi_riset.json", mime="application/json")
+        st.write(f"**Total referensi:** {len(records)}")
+        
+        # Filter option before export
+        export_filter = st.radio("Ekspor:", ["Semua", "Hanya terverifikasi", "Hanya perlu verifikasi"], horizontal=True)
+        
+        export_records = records
+        if export_filter == "Hanya terverifikasi":
+            export_records = [r for r in records if "candidate" in r.get("indexing_status", "").lower() or "impact" in r.get("indexing_status", "").lower()]
+            st.write(f"🔄 Diekspor: {len(export_records)} dari {len(records)}")
+        elif export_filter == "Hanya perlu verifikasi":
+            export_records = [r for r in records if r.get("indexing_status", "") == "Needs verification"]
+            st.write(f"🔄 Diekspor: {len(export_records)} dari {len(records)}")
+        
+        st.divider()
+        
+        if export_records:
+            col_exp1, col_exp2 = st.columns(2)
+            with col_exp1:
+                st.download_button("📥 CSV", data=to_csv(export_records), file_name="bibliografi_riset.csv", mime="text/csv", use_container_width=True)
+                st.download_button("📥 BibTeX", data=to_bibtex(export_records).encode("utf-8"), file_name="bibliografi_riset.bib", mime="text/plain", use_container_width=True)
+            
+            with col_exp2:
+                st.download_button("📥 RIS", data=to_ris(export_records).encode("utf-8"), file_name="bibliografi_riset.ris", mime="text/plain", use_container_width=True)
+                st.download_button("📥 JSON", data=json.dumps(export_records, ensure_ascii=False, indent=2).encode("utf-8"), file_name="bibliografi_riset.json", mime="application/json", use_container_width=True)
+        else:
+            st.warning("Tidak ada referensi sesuai filter untuk diekspor.")
 
 with guide_tab:
-    st.subheader("Panduan deploy Streamlit Cloud")
-    st.markdown("""
-1. Upload semua file ke GitHub: `app.py`, `requirements.txt`, folder `.streamlit`, dan folder `data`.
-2. Di Streamlit Community Cloud, pilih repo dan main file `app.py`.
-3. Pada **Advanced settings**, pilih Python **3.12** atau **3.11**. Jangan gunakan Python 3.14 untuk aplikasi ini.
-4. Klik Deploy/Reboot.
+    st.subheader("🚀 Panduan Penggunaan & Deploy")
+    
+    tab_usage, tab_deploy, tab_tips = st.tabs(["📖 Cara Pakai", "☁️ Deploy Cloud", "💡 Tips"])
+    
+    with tab_usage:
+        st.write("""
+### 1️⃣ Cari Referensi
+- Gunakan **tab Cari** untuk mencari ke Crossref & OpenAlex
+- Masukkan keyword topik penelitian
+- Pilih sumber data yang diinginkan
+- Sistem otomatis mendeduplikasi dan mengklasifikasi
 
-Catatan: file ini sengaja memakai dependency minimal (`streamlit` dan `requests`) supaya lebih aman di Streamlit Cloud.
-""")
+### 2️⃣ Upload File
+- Dukung format: **CSV, BibTeX (.bib), RIS (.ris)**
+- CSV untuk ekspor dari Scopus/WoS (lebih stabil di Cloud)
+- Sistem otomatis ekstrak metadata dan identifikasi DOI
+
+### 3️⃣ Input Manual
+- Tambah referensi satu per satu
+- Isi minimal: Judul + tahun
+- Pilih database asal (Manual, Scopus, WoS, SINTA, dll)
+
+### 4️⃣ Analisis Data
+- **Tab Data**: View & filter dengan sorting terbaru dulu
+- **Tab Insight**: Dashboard dengan grafik distribusi, penulis terbanyak, rekomendasi
+- Lihat detail lengkap setiap referensi
+
+### 5️⃣ Ekspor
+- Pilih format: CSV, BibTeX, RIS, JSON
+- Pilih yang diekspor: Semua / Terverifikasi / Perlu verifikasi
+        """)
+    
+    with tab_deploy:
+        st.write("""
+### Langkah Deploy ke Streamlit Cloud
+
+**Persiapan:**
+1. Upload semua file ke GitHub repo:
+   - `app.py` (file utama)
+   - `requirements.txt` 
+   - `.streamlit/config.toml` (jika ada)
+   - `data/sample_references.csv`
+
+**Deploy:**
+1. Masuk ke https://share.streamlit.io/
+2. Klik "Create app"
+3. Pilih repo, branch `main`, dan main file `app.py`
+4. ⚠️ **PENTING**: Di Advanced settings, pilih Python **3.11** atau **3.12**
+   - Jangan gunakan Python 3.14 untuk app ini
+5. Klik Deploy/Reboot
+6. Tunggu proses selesai (~3-5 menit)
+
+**Troubleshooting:**
+- Jika error, hapus deployment lama dan deploy ulang
+- Pastikan `requirements.txt` dengan versi yang tepat
+- Jangan gunakan Python terlalu baru
+        """)
+    
+    with tab_tips:
+        st.write("""
+### 💡 Tips Optimal Penggunaan
+
+**Untuk Pencarian:**
+- Gunakan keyword spesifik: misal "machine learning education" bukan hanya "learning"
+- Kombinasi database Crossref + OpenAlex untuk hasil lebih lengkap
+- Set email di pengaturan untuk API rate limit lebih tinggi
+
+**Untuk Upload:**
+- CSV dari Scopus/WoS: **lebih aman** di Streamlit Cloud dibanding format lain
+- Buat backup lokal sebelum upload
+- File BibTeX dari Zotero/Mendeley biasanya bersih dan terbaca
+
+**Untuk Analisis:**
+- **Sortir Terbaru Dulu** untuk mengetahui publikasi terkini
+- Lihat **Status Verifikasi** untuk mengidentifikasi publikasi yang sudah terbukti di indeks resmi
+- Gunakan **Detail Viewer** untuk membaca abstrak lengkap
+
+**Best Practice:**
+- Tambahkan DOI sebanyak mungkin untuk data quality
+- Validasi manual di Scopus/WoS untuk publikasi kritikal
+- Gunakan keywords yang konsisten untuk searching
+- Export berkala sebagai backup
+
+### ❓ FAQ
+
+**Q: Dapatkah saya upload ke Streamlit Cloud langsung dari app?**
+A: Tidak, data hanya tersimpan di session. Upload file ke GitHub untuk persistence di Cloud.
+
+**Q: Apakah ada limit jumlah referensi?**
+A: Tidak ada limit teknis, tapi performa tergantung browser & koneksi internet.
+
+**Q: Bagaimana cara backup data saya?**
+A: Ekspor ke CSV/JSON setiap selesai session, atau upload file tersebut ke GitHub.
+        """)
