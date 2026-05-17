@@ -106,3 +106,13 @@ Ditambahkan tab **Q-Level Toolkit** untuk membantu naskah sesuai kaidah jurnal b
 - Cover letter template
 - Response to reviewer template
 - Q-Level readiness report
+
+## Sumber Relevan
+
+Ditambahkan:
+- Sumber API baru: PLOS
+- Tab **Sumber Relevan**
+- Rekomendasi database aktif dan import manual
+- Query variants otomatis untuk tema seperti precision livestock farming
+- Daftar sumber penting: AGRIS/FAO, USDA PubAg, CAB Abstracts, IEEE Xplore, ScienceDirect, SpringerLink, MDPI, Frontiers, Taylor & Francis, Wiley
+- Export daftar sumber relevan

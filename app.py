@@ -61,6 +61,7 @@ SOURCE_HELP = {
     "arXiv": "Preprint kredibel untuk CS, matematika, fisika, statistik, dan bidang terkait.",
     "Europe PMC": "Literatur biomedis dan life sciences.",
     "DataCite": "Metadata DOI untuk dataset, report, preprint, software, dan output riset lain.",
+    "PLOS": "Open-access journal articles from the PLOS public search API.",
 }
 
 
@@ -505,6 +506,7 @@ SOURCE_FUNCTIONS = {
     "arXiv": search_arxiv,
     "Europe PMC": search_europe_pmc,
     "DataCite": search_datacite,
+    "PLOS": search_plos,
 }
 
 
@@ -559,7 +561,7 @@ def filter_relevant(records: List[Dict[str, str]], theme: str, min_score: float)
 
 def select_sources(theme: str) -> List[str]:
     text = theme.lower()
-    sources = ["Crossref", "OpenAlex", "Semantic Scholar", "DOAJ", "DataCite"]
+    sources = ["Crossref", "OpenAlex", "Semantic Scholar", "PLOS", "DOAJ", "DataCite"]
     if any(t in text for t in ["health", "medical", "clinical", "patient", "disease", "biomedical", "nursing", "public health", "kesehatan", "medis", "pasien"]):
         sources += ["PubMed", "Europe PMC"]
     if any(t in text for t in ["computer", "machine learning", "artificial intelligence", "ai", "deep learning", "algorithm", "software", "physics", "mathematics", "statistics", "quantum"]):
@@ -2404,7 +2406,7 @@ def build_review_checklist(records: List[Dict[str, str]], screened: List[Dict[st
 
 
 def render_journal_review_builder_tab():
-    st.subheader("📝 Jurnal Review Builder dan Q-Level Toolkit")
+    st.subheader("📝 Jurnal Review Builder dan Q-Level Toolkit dan Sumber Relevan")
     records = st.session_state.theme_records or st.session_state.records
     screened = st.session_state.screened
     meta_studies = st.session_state.meta_studies
@@ -2603,7 +2605,7 @@ def build_qlevel_checklist(theme: str, records: List[Dict[str, str]], screened: 
             "area": "Title",
             "criterion": "Judul spesifik, memuat tema, metode review, dan jenis analisis.",
             "status": "Ready" if theme else "Needs work",
-            "action": "Gunakan alternatif judul dari Jurnal Review Builder dan Q-Level Toolkit."
+            "action": "Gunakan alternatif judul dari Jurnal Review Builder dan Q-Level Toolkit dan Sumber Relevan."
         },
         {
             "area": "Abstract",
@@ -2669,7 +2671,7 @@ def build_qlevel_checklist(theme: str, records: List[Dict[str, str]], screened: 
             "area": "Discussion",
             "criterion": "Pembahasan mengaitkan hasil, gap, novelty, implikasi, dan keterbatasan.",
             "status": "Ready" if records else "Needs work",
-            "action": "Gunakan Jurnal Review Builder dan Q-Level Toolkit lalu perkuat dengan argumen kritis."
+            "action": "Gunakan Jurnal Review Builder dan Q-Level Toolkit dan Sumber Relevan lalu perkuat dengan argumen kritis."
         },
         {
             "area": "References",
@@ -2993,6 +2995,182 @@ def render_qlevel_toolkit_tab():
         )
 
 
+
+# =========================================================
+# Relevant Source Enhancer
+# =========================================================
+def search_plos(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    """Search PLOS public API. Useful for open-access empirical studies."""
+    params = {
+        "q": f'title:"{query}" OR abstract:"{query}" OR everything:"{query}"',
+        "rows": min(rows, 100),
+        "wt": "json",
+        "fl": "id,title,author,journal,publication_date,abstract,subject"
+    }
+    r = requests.get("https://api.plos.org/search", params=params, timeout=25)
+    r.raise_for_status()
+
+    records = []
+    for item in r.json().get("response", {}).get("docs", []):
+        authors = item.get("author", [])
+        if isinstance(authors, str):
+            authors = [authors]
+        abstract = item.get("abstract", "")
+        if isinstance(abstract, list):
+            abstract = " ".join(abstract)
+        subjects = item.get("subject", [])
+        if isinstance(subjects, str):
+            subjects = [subjects]
+
+        doi = item.get("id", "")
+        records.append({
+            "title": item.get("title", ""),
+            "authors": authors,
+            "year": year_from_text(item.get("publication_date", "")),
+            "journal": item.get("journal", ""),
+            "publisher": "PLOS",
+            "doi": doi.replace("doi:", ""),
+            "url": f"https://doi.org/{doi.replace('doi:', '')}" if doi else "",
+            "database": "PLOS",
+            "abstract": abstract,
+            "keywords": "; ".join(subjects[:8]),
+            "notes": "Open access PLOS API",
+        })
+    return standardize(records)
+
+
+def relevant_source_catalog(theme: str = "") -> List[Dict[str, str]]:
+    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    plf_note = "Sangat relevan untuk precision livestock farming, smart farming, sensor, IoT, animal welfare, dairy/cattle/poultry, dan computer vision."
+    return [
+        {"source": "Crossref", "type": "API aktif", "best_for": "DOI metadata lintas publisher", "use_in_app": "Ya", "note": "Sumber dasar untuk deduplikasi DOI."},
+        {"source": "OpenAlex", "type": "API aktif", "best_for": "Open bibliographic index, konsep/topik, venue", "use_in_app": "Ya", "note": "Bagus untuk pemetaan umum dan discovery."},
+        {"source": "Semantic Scholar", "type": "API aktif", "best_for": "Paper AI/ML, citation-oriented metadata", "use_in_app": "Ya", "note": "Relevan untuk computer vision, machine learning, sensor analytics."},
+        {"source": "PLOS", "type": "API aktif", "best_for": "Open-access empirical papers", "use_in_app": "Ya", "note": "Tambahan sumber open access yang mudah dipakai."},
+        {"source": "PubMed", "type": "API aktif", "best_for": "Animal health, veterinary, biomedical, disease detection", "use_in_app": "Ya", "note": "Relevan untuk livestock health, welfare, veterinary outcomes."},
+        {"source": "Europe PMC", "type": "API aktif", "best_for": "Life sciences, veterinary, biomedical full-text links", "use_in_app": "Ya", "note": "Pelengkap PubMed."},
+        {"source": "DOAJ", "type": "API aktif", "best_for": "Open-access journals", "use_in_app": "Ya", "note": "Bagus untuk OA journal discovery."},
+        {"source": "arXiv", "type": "API aktif", "best_for": "Preprint AI, computer vision, ML, sensor data", "use_in_app": "Ya", "note": "Gunakan untuk teknologi/AI, tapi validasi status peer-review."},
+        {"source": "DataCite", "type": "API aktif", "best_for": "Dataset, software, report, preprint DOI", "use_in_app": "Ya", "note": "Berguna untuk data/supplementary material."},
+        {"source": "Scopus", "type": "Import manual", "best_for": "Artikel Q-level, citation data, author affiliation", "use_in_app": "Upload Excel/RIS/BibTeX", "note": "Ekspor dari akun institusi lalu upload."},
+        {"source": "Web of Science", "type": "Import manual", "best_for": "WoS Core Collection, citation report", "use_in_app": "Upload Excel/RIS/BibTeX", "note": "Ekspor dari akun institusi lalu upload."},
+        {"source": "AGRIS / FAO", "type": "Search/import manual", "best_for": "Agriculture, livestock, agrifood systems", "use_in_app": "Cari lalu ekspor metadata jika tersedia", "note": plf_note},
+        {"source": "USDA PubAg", "type": "Search/import manual", "best_for": "USDA-funded agricultural literature", "use_in_app": "Cari lalu ekspor metadata jika tersedia", "note": "Sangat relevan untuk animal science dan agriculture."},
+        {"source": "CAB Abstracts / CABI", "type": "Import manual/berlangganan", "best_for": "Agriculture, veterinary, animal science", "use_in_app": "Upload hasil ekspor", "note": "Sangat relevan untuk review bidang peternakan."},
+        {"source": "IEEE Xplore", "type": "Import manual/berlangganan", "best_for": "IoT, sensors, computer vision, embedded systems", "use_in_app": "Upload BibTeX/RIS", "note": "Relevan untuk teknologi precision farming."},
+        {"source": "ScienceDirect", "type": "Import manual/berlangganan", "best_for": "Elsevier journals: Computers and Electronics in Agriculture, Biosystems Engineering", "use_in_app": "Upload BibTeX/RIS", "note": "Sangat relevan untuk smart agriculture."},
+        {"source": "SpringerLink", "type": "Import manual/berlangganan/OA", "best_for": "AI, agriculture, animal science", "use_in_app": "Upload BibTeX/RIS", "note": "Pelengkap untuk literatur peer-reviewed."},
+        {"source": "MDPI", "type": "Search/import manual", "best_for": "Sensors, Animals, Agriculture, Applied Sciences", "use_in_app": "Upload BibTeX/RIS", "note": "Relevan untuk PLF, tetapi validasi kualitas jurnal tetap perlu."},
+        {"source": "Frontiers", "type": "Search/import manual", "best_for": "Veterinary science, animal science, digital agriculture", "use_in_app": "Upload BibTeX/RIS", "note": "Pelengkap literatur OA."},
+        {"source": "Taylor & Francis / Wiley", "type": "Import manual/berlangganan", "best_for": "Animal science, agriculture, veterinary", "use_in_app": "Upload BibTeX/RIS", "note": "Gunakan untuk melengkapi literatur Q-level."},
+    ]
+
+
+def build_query_variants(theme: str) -> List[str]:
+    theme_clean = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
+    base = [theme_clean]
+    lower = theme_clean.lower()
+    if "precision livestock" in lower or "livestock" in lower:
+        base += [
+            "precision livestock farming",
+            "smart livestock farming",
+            "precision dairy farming",
+            "livestock monitoring sensors",
+            "animal welfare monitoring sensors",
+            "IoT livestock monitoring",
+            "machine learning livestock farming",
+            "computer vision livestock monitoring",
+            "wearable sensors cattle",
+            "smart dairy cow monitoring",
+            "poultry monitoring computer vision",
+        ]
+    elif "smart farming" in lower or "precision agriculture" in lower:
+        base += [
+            "smart farming IoT sensors",
+            "precision agriculture machine learning",
+            "digital agriculture monitoring",
+            "agricultural sensors artificial intelligence",
+        ]
+    elif "animal welfare" in lower:
+        base += [
+            "animal welfare monitoring",
+            "livestock welfare sensors",
+            "animal behavior detection",
+            "computer vision animal welfare",
+        ]
+    return list(dict.fromkeys([q for q in base if q]))[:8]
+
+
+def source_specific_query(theme: str, source: str) -> str:
+    variants = build_query_variants(theme)
+    if source in ["Crossref", "OpenAlex", "Semantic Scholar", "PLOS", "DOAJ", "DataCite"]:
+        return variants[0]
+    if source in ["PubMed", "Europe PMC"]:
+        if "livestock" in theme.lower():
+            return "(precision livestock farming) OR (livestock monitoring) OR (animal welfare monitoring) OR (veterinary sensors)"
+        return variants[0]
+    if source == "arXiv":
+        if "livestock" in theme.lower():
+            return "computer vision livestock monitoring OR machine learning agriculture sensors"
+        return variants[0]
+    return variants[0]
+
+
+def render_relevant_sources_tab():
+    st.subheader("🌐 Sumber Relevan")
+    theme = st.session_state.get("last_theme", "") or st.text_input("Tema untuk rekomendasi sumber", value="precision livestock farming", key="source_theme_manual")
+    catalog = relevant_source_catalog(theme)
+
+    st.write("### Sumber API aktif di aplikasi")
+    active = [r for r in catalog if r["type"] == "API aktif"]
+    st.dataframe(active, use_container_width=True, height=330)
+
+    st.write("### Sumber penting untuk ditambahkan lewat upload")
+    manual = [r for r in catalog if r["type"] != "API aktif"]
+    st.dataframe(manual, use_container_width=True, height=430)
+
+    st.write("### Query variants yang disarankan")
+    variants = build_query_variants(theme)
+    for q in variants:
+        st.code(q)
+
+    st.write("### Search string siap pakai")
+    if "precision livestock" in theme.lower() or "livestock" in theme.lower():
+        st.text_area(
+            "Boolean string PLF",
+            value='("precision livestock farming" OR "smart livestock farming" OR "precision dairy farming" OR "livestock monitoring" OR "animal welfare monitoring" OR "IoT livestock" OR "computer vision livestock" OR "wearable sensors cattle") AND (sensor* OR "machine learning" OR "artificial intelligence" OR "computer vision" OR monitoring OR welfare OR health)',
+            height=120,
+        )
+    else:
+        st.text_area(
+            "Boolean string umum",
+            value=build_search_string(theme)["combined"] if "build_search_string" in globals() else theme,
+            height=120,
+        )
+
+    st.info(
+        "Untuk database berlangganan seperti Scopus, Web of Science, IEEE Xplore, ScienceDirect, CAB Abstracts, dan SpringerLink, "
+        "gunakan search string di atas, ekspor hasil dalam Excel/RIS/BibTeX, lalu upload ke tab Bibliografi."
+    )
+
+    if "rows_to_xlsx" in globals():
+        st.download_button(
+            "📥 Download Daftar Sumber Relevan Excel",
+            data=rows_to_xlsx(catalog, ["source", "type", "best_for", "use_in_app", "note"], "Sumber Relevan"),
+            file_name="daftar_sumber_relevan.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    else:
+        st.download_button(
+            "📥 Download Daftar Sumber Relevan CSV",
+            data=safe_csv(catalog, ["source", "type", "best_for", "use_in_app", "note"]),
+            file_name="daftar_sumber_relevan.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -3033,8 +3211,9 @@ tabs = st.tabs([
     "📉 Sensitivity & Bias",
     "📌 Insight Akhir",
     "🧩 Bahan Penelitian",
-    "📝 Jurnal Review Builder dan Q-Level Toolkit",
-    "🏆 Q-Level Toolkit",
+    "📝 Jurnal Review Builder dan Q-Level Toolkit dan Sumber Relevan",
+    "🏆 Q-Level Toolkit dan Sumber Relevan",
+    "🌐 Sumber Relevan",
     "📤 Export",
     "📖 Panduan"
 ])
@@ -3077,7 +3256,7 @@ with tabs[0]:
             for i, source in enumerate(selected_sources, 1):
                 status.info(f"Mencari dari {source}...")
                 try:
-                    res = SOURCE_FUNCTIONS[source](theme, rows_per_source, email)
+                    res = SOURCE_FUNCTIONS[source](source_specific_query(theme, source), rows_per_source, email)
                     found += res
                     st.write(f"✅ {source}: {len(res)} record")
                 except Exception as exc:
@@ -3152,7 +3331,7 @@ with tabs[1]:
             year = st.text_input("Tahun")
             journal = st.text_input("Jurnal")
             doi = st.text_input("DOI")
-            database = st.selectbox("Database", ["Manual", "Scopus", "Web of Science", "Crossref", "OpenAlex", "PubMed", "DOAJ", "Lainnya"])
+            database = st.selectbox("Database", ["Manual", "Scopus", "Web of Science", "Crossref", "OpenAlex", "PubMed", "PLOS", "DOAJ", "DataCite", "Lainnya"])
             submitted = st.form_submit_button("Tambah")
         if submitted:
             add_records(standardize([{"title": title, "authors": authors, "year": year, "journal": journal, "doi": doi, "database": database}]))
@@ -3432,6 +3611,12 @@ with tabs[10]:
 
         qlevel_report = build_qlevel_report(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Q-Level Readiness Report TXT", data=qlevel_report.encode("utf-8"), file_name="qlevel_journal_readiness_report.txt", mime="text/plain", use_container_width=True)
+
+        source_catalog = relevant_source_catalog(st.session_state.last_theme)
+        if "rows_to_xlsx" in globals():
+            st.download_button("📥 Daftar Sumber Relevan Excel", data=rows_to_xlsx(source_catalog, ["source", "type", "best_for", "use_in_app", "note"], "Sumber Relevan"), file_name="daftar_sumber_relevan.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        else:
+            st.download_button("📥 Daftar Sumber Relevan CSV", data=safe_csv(source_catalog, ["source", "type", "best_for", "use_in_app", "note"]), file_name="daftar_sumber_relevan.csv", mime="text/csv", use_container_width=True)
         st.download_button("📥 Bahan Penelitian TXT", data=research_materials.encode("utf-8"), file_name="bahan_penelitian_biblio_meta.txt", mime="text/plain", use_container_width=True)
 
 with tabs[11]:
@@ -3448,7 +3633,7 @@ with tabs[11]:
 8. Upload kembali file tersebut ke tab **Meta-Analysis**.
 9. Isi **Risk of Bias**.
 10. Cek **Sensitivity & Bias**.
-11. Buka **Bahan Penelitian** dan **Jurnal Review Builder dan Q-Level Toolkit** untuk mengambil judul, rumusan masalah, gap, novelty, pembahasan, kesimpulan, serta draft artikel review, checklist Q-level, cover letter, dan response-to-reviewer template.
+11. Buka **Bahan Penelitian** dan **Jurnal Review Builder dan Q-Level Toolkit dan Sumber Relevan** untuk mengambil judul, rumusan masalah, gap, novelty, pembahasan, kesimpulan, serta draft artikel review, checklist Q-level, cover letter, dan response-to-reviewer template.
 12. Export laporan dari tab **Export**.
 
 ### Sumber kredibel
@@ -3462,7 +3647,7 @@ with tabs[11]:
 - DataCite
 
 ### Catatan penting
-Status Scopus/WoS/high impact adalah kandidat berbasis metadata, bukan validasi resmi. Validasi akhir tetap perlu dilakukan melalui Scopus, Web of Science, JCR, SJR, atau laman resmi jurnal.
+Status Scopus/WoS/high impact adalah kandidat berbasis metadata, bukan validasi resmi. Validasi akhir tetap perlu dilakukan melalui Scopus, Web of Science, JCR, SJR, AGRIS/FAO, PubAg/USDA, CAB Abstracts, IEEE Xplore, ScienceDirect, SpringerLink, atau laman resmi jurnal.
 
 Untuk meta-analysis, hasil otomatis harus divalidasi kembali dengan full-text dan software statistik khusus jika digunakan untuk publikasi akademik.
 """)
