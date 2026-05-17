@@ -4,23 +4,41 @@ from __future__ import annotations
 import csv
 import io
 import json
-import re
 import math
+import re
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Tuple
 
 import requests
 import streamlit as st
 
-APP_TITLE = "Sistem Bibliografi Riset"
 
+APP_TITLE = "Sistem Bibliografi & Meta-Analisis"
 COLUMNS = [
     "title", "authors", "year", "journal", "publisher", "doi", "url",
-    "database", "impact_factor", "global_citations", "local_citations",
-    "references", "affiliations", "countries", "document_type",
-    "indexing_status", "verification_reason",
-    "abstract", "keywords", "notes"
+    "database", "impact_factor", "indexing_status", "verification_reason",
+    "abstract", "keywords", "notes", "theme_relevance_score"
+]
+
+META_EXTRACTION_COLUMNS = [
+    "include", "study_id", "authors", "year", "title", "journal", "doi", "group",
+    "effect_type", "effect_size", "standard_error",
+    "n_t", "mean_t", "sd_t", "n_c", "mean_c", "sd_c",
+    "event_t", "total_t", "event_c", "total_c",
+    "non_event_t", "non_event_c", "r", "n",
+    "outcome", "population", "intervention", "comparison", "notes"
+]
+
+SCREENING_COLUMNS = [
+    "title", "authors", "year", "journal", "doi", "database",
+    "screening_status", "screening_reason", "theme_relevance_score"
+]
+
+ROB_COLUMNS = [
+    "study_id", "randomization", "blinding", "incomplete_data",
+    "selective_reporting", "confounding_control", "sample_size_adequate",
+    "overall_risk", "notes"
 ]
 
 HIGH_IMPACT_HINTS = [
@@ -28,35 +46,26 @@ HIGH_IMPACT_HINTS = [
     "ieee transactions", "acm transactions", "acm computing surveys",
     "review of educational research", "springer nature", "elsevier",
     "wiley", "taylor & francis", "sage", "oxford university press",
-    "cambridge university press", "mit press", "bmj", "plos biology",
-    "annual reviews"
+    "cambridge university press", "mit press", "bmj", "annual reviews"
 ]
-
-SCOPUS_HINTS = [
-    "scopus", "elsevier", "eid", "source-id", "source id",
-    "citescore", "sciencedirect"
-]
-
-WOS_HINTS = [
-    "web of science", "wos", "clarivate", "sci-expanded", "ssci",
-    "ahci", "esci", "journal citation reports", "jcr", "isi"
-]
+SCOPUS_HINTS = ["scopus", "elsevier", "eid", "source-id", "source id", "citescore", "sciencedirect"]
+WOS_HINTS = ["web of science", "wos", "clarivate", "sci-expanded", "ssci", "ahci", "esci", "jcr", "isi"]
 
 SOURCE_HELP = {
     "Crossref": "Metadata DOI lintas publisher akademik.",
     "OpenAlex": "Database open bibliographic besar untuk karya ilmiah.",
     "PubMed": "Literatur biomedis dari NCBI/NLM.",
-    "Semantic Scholar": "Indeks AI2 untuk paper dan metadata akademik.",
+    "Semantic Scholar": "Metadata paper dari Allen Institute for AI.",
     "DOAJ": "Directory of Open Access Journals.",
     "arXiv": "Preprint kredibel untuk CS, matematika, fisika, statistik, dan bidang terkait.",
     "Europe PMC": "Literatur biomedis dan life sciences.",
-    "CORE": "Agregator open access repositories. Kadang membutuhkan API key/akses tertentu.",
+    "DataCite": "Metadata DOI untuk dataset, report, preprint, software, dan output riset lain.",
 }
 
 
-# =========================
-# Utility
-# =========================
+# =========================================================
+# Basic utilities
+# =========================================================
 def clean(value: object) -> str:
     if value is None:
         return ""
@@ -75,6 +84,15 @@ def first(row: Dict[str, object], keys: Iterable[str]) -> str:
     return ""
 
 
+def safe_float(value, default=None):
+    try:
+        if value is None or str(value).strip() == "":
+            return default
+        return float(str(value).replace(",", "."))
+    except Exception:
+        return default
+
+
 def doi_from_text(text: str) -> str:
     match = re.search(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", clean(text), re.I)
     return match.group(0).strip(".,;) ").lower() if match else ""
@@ -87,30 +105,25 @@ def year_from_text(text: object) -> str:
 
 def authors_to_text(authors: object) -> str:
     if isinstance(authors, list):
-        cleaned = []
+        names = []
         for a in authors:
             if isinstance(a, dict):
-                name = a.get("name") or a.get("display_name") or a.get("full_name") or ""
-                cleaned.append(clean(name))
+                names.append(clean(a.get("name") or a.get("display_name") or a.get("full_name") or ""))
             else:
-                cleaned.append(clean(a))
-        return "; ".join(a for a in cleaned if a)
+                names.append(clean(a))
+        return "; ".join(a for a in names if a)
     text = clean(authors)
     text = re.sub(r"\s+and\s+", "; ", text, flags=re.I)
     return text.replace("|", ";")
 
 
-def classify(row: Dict[str, str]) -> tuple[str, str]:
-    joined = " ".join(
-        row.get(k, "") for k in ["journal", "publisher", "database", "notes", "url", "keywords"]
-    ).lower()
-
-    tags: List[str] = []
-    reasons: List[str] = []
+def classify(row: Dict[str, str]) -> Tuple[str, str]:
+    joined = " ".join(row.get(k, "") for k in ["journal", "publisher", "database", "notes", "url", "keywords"]).lower()
+    tags, reasons = [], []
 
     if any(h in joined for h in SCOPUS_HINTS):
         tags.append("Scopus candidate")
-        reasons.append("metadata mengandung indikator Scopus/Elsevier/EID/CiteScore")
+        reasons.append("metadata mengandung indikator Scopus/Elsevier/CiteScore")
 
     if any(h in joined for h in WOS_HINTS):
         tags.append("Web of Science candidate")
@@ -118,7 +131,7 @@ def classify(row: Dict[str, str]) -> tuple[str, str]:
 
     if any(h in joined for h in HIGH_IMPACT_HINTS):
         tags.append("High-impact candidate")
-        reasons.append("nama jurnal/publisher terdeteksi sebagai kandidat jurnal bereputasi tinggi")
+        reasons.append("nama jurnal/publisher terdeteksi sebagai kandidat bereputasi tinggi")
 
     impact = clean(row.get("impact_factor", "")).replace(",", ".")
     try:
@@ -136,51 +149,33 @@ def classify(row: Dict[str, str]) -> tuple[str, str]:
 
 
 def standardize(records: Iterable[Dict[str, object]]) -> List[Dict[str, str]]:
-    output: List[Dict[str, str]] = []
-    seen = set()
-
+    output, seen = [], set()
     for raw in records:
         title = first(raw, ["title", "article title", "document title", "judul", "dc:title", "ti", "name"])
         doi = doi_from_text(first(raw, ["doi", "prism:doi", "di", "url", "link", "DOI", "externalids"]))
-        journal = first(raw, [
-            "journal", "source title", "publication name", "container title",
-            "source", "booktitle", "so", "journal/book", "venue"
-        ])
+        journal = first(raw, ["journal", "source title", "publication name", "container title", "source", "booktitle", "so", "venue"])
 
         row = {
             "title": title,
-            "authors": authors_to_text(first(raw, [
-                "authors", "author", "creators", "penulis", "dc:creator", "au", "authorstring"
-            ])),
-            "year": year_from_text(first(raw, [
-                "year", "publication year", "published year", "cover date",
-                "date", "publication date", "py", "published", "published_date"
-            ])),
+            "authors": authors_to_text(first(raw, ["authors", "author", "creators", "penulis", "dc:creator", "au", "authorstring"])),
+            "year": year_from_text(first(raw, ["year", "publication year", "published year", "cover date", "date", "publication date", "py", "published", "published_date"])),
             "journal": journal,
             "publisher": first(raw, ["publisher", "publisher name", "host organization name"]),
             "doi": doi,
             "url": first(raw, ["url", "link", "links", "record url"]),
             "database": first(raw, ["database", "source database", "index", "web of science index"]),
             "impact_factor": first(raw, ["impact factor", "impact_factor", "jif", "citescore", "sjr"]),
-            "global_citations": first(raw, ["global citations", "global_citations", "citations", "citation count", "cited_by_count", "is-referenced-by-count", "times cited", "tc"]),
-            "local_citations": first(raw, ["local citations", "local_citations", "lc"]),
-            "references": first(raw, ["references", "cited references", "cr", "bibliography", "reference list"]),
-            "affiliations": first(raw, ["affiliations", "affiliation", "institutions", "institution"]),
-            "countries": first(raw, ["countries", "country", "author countries"]),
-            "document_type": first(raw, ["document type", "publication type", "type", "subtype"]),
             "abstract": first(raw, ["abstract", "description", "ab"]),
             "keywords": first(raw, ["keywords", "author keywords", "index keywords", "keyword", "de"]),
             "notes": first(raw, ["notes", "eid", "ut", "accession number", "document type", "type"]),
+            "theme_relevance_score": first(raw, ["theme_relevance_score", "relevance", "score"]),
         }
 
         if not row["title"] and not row["doi"]:
             continue
 
         row["indexing_status"], row["verification_reason"] = classify(row)
-
-        key = row["doi"] or re.sub(
-            r"\W+", " ", (row["title"] + row["journal"] + row["year"]).lower()
-        ).strip()
+        key = row["doi"] or re.sub(r"\W+", " ", (row["title"] + row["journal"] + row["year"]).lower()).strip()
 
         if key and key not in seen:
             seen.add(key)
@@ -189,17 +184,31 @@ def standardize(records: Iterable[Dict[str, object]]) -> List[Dict[str, str]]:
     return output
 
 
-# =========================
-# Parsers
-# =========================
+def safe_csv(rows: List[Dict[str, object]], fieldnames: List[str]) -> bytes:
+    buf = io.StringIO()
+    extra = []
+    for row in rows:
+        for key in row.keys():
+            if key not in fieldnames and key not in extra:
+                extra.append(key)
+    final_fields = fieldnames + extra
+    writer = csv.DictWriter(buf, fieldnames=final_fields, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({col: row.get(col, "") for col in final_fields})
+    return buf.getvalue().encode("utf-8-sig")
+
+
+# =========================================================
+# File parsers
+# =========================================================
 def parse_csv_bytes(data: bytes) -> List[Dict[str, str]]:
     text = data.decode("utf-8-sig", errors="replace")
     try:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
     except csv.Error:
         dialect = csv.excel
-    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
-    return standardize(list(reader))
+    return standardize(list(csv.DictReader(io.StringIO(text), dialect=dialect)))
 
 
 def parse_bibtex(text: str) -> List[Dict[str, str]]:
@@ -221,41 +230,32 @@ def parse_ris(text: str) -> List[Dict[str, str]]:
         "JA": "journal", "T2": "journal", "DO": "doi", "UR": "url",
         "AB": "abstract", "N2": "abstract", "KW": "keywords", "PB": "publisher"
     }
-    records = []
-    current: Dict[str, object] = {}
-
+    records, current = [], {}
     for line in text.splitlines():
         if line.startswith("ER"):
             if current:
                 records.append(current)
             current = {}
             continue
-
         m = re.match(r"([A-Z0-9]{2})\s*-\s*(.*)", line)
         if not m:
             continue
-
         field = keymap.get(m.group(1))
         if not field:
             continue
-
         value = clean(m.group(2))
-        old_value = clean(current.get(field, ""))
-        current[field] = old_value + ("; " if old_value else "") + value
-
+        old = clean(current.get(field, ""))
+        current[field] = old + ("; " if old else "") + value
     if current:
         records.append(current)
-
     return standardize(records)
 
 
-# =========================
-# Credible metadata sources
-# =========================
+# =========================================================
+# Search sources
+# =========================================================
 def search_crossref(query: str, rows: int, email: str) -> List[Dict[str, str]]:
-    headers = {
-        "User-Agent": f"BibliografiStreamlit/6.0 (mailto:{email or 'example@example.com'})"
-    }
+    headers = {"User-Agent": f"BibliografiMeta/1.0 (mailto:{email or 'example@example.com'})"}
     params = {"query.bibliographic": query, "rows": min(rows, 100), "sort": "relevance"}
     r = requests.get("https://api.crossref.org/works", params=params, headers=headers, timeout=25)
     r.raise_for_status()
@@ -269,29 +269,19 @@ def search_crossref(query: str, rows: int, email: str) -> List[Dict[str, str]]:
             if parts and parts[0]:
                 year = str(parts[0][0])
                 break
-
-        authors = []
-        for a in item.get("author", []) or []:
-            name = clean((a.get("given", "") + " " + a.get("family", "")).strip())
-            if name:
-                authors.append(name)
-
+        authors = [clean((a.get("given", "") + " " + a.get("family", "")).strip()) for a in item.get("author", []) or []]
         records.append({
             "title": (item.get("title") or [""])[0],
-            "authors": authors,
+            "authors": [a for a in authors if a],
             "year": year,
             "journal": (item.get("container-title") or [""])[0],
             "publisher": item.get("publisher", ""),
             "doi": item.get("DOI", ""),
             "url": item.get("URL", ""),
             "database": "Crossref",
-            "global_citations": item.get("is-referenced-by-count", ""),
-            "references": "; ".join(str(ref.get("DOI", ref.get("article-title", ""))) for ref in item.get("reference", [])[:100] if isinstance(ref, dict)),
-            "document_type": item.get("type", ""),
             "abstract": item.get("abstract", ""),
             "notes": item.get("type", ""),
         })
-
     return standardize(records)
 
 
@@ -299,7 +289,6 @@ def search_openalex(query: str, rows: int, email: str) -> List[Dict[str, str]]:
     params = {"search": query, "per-page": min(rows, 200)}
     if email:
         params["mailto"] = email
-
     r = requests.get("https://api.openalex.org/works", params=params, timeout=25)
     r.raise_for_status()
 
@@ -307,85 +296,58 @@ def search_openalex(query: str, rows: int, email: str) -> List[Dict[str, str]]:
     for item in r.json().get("results", []):
         primary = item.get("primary_location") or {}
         source = primary.get("source") or {}
-        authors = [
-            a.get("author", {}).get("display_name", "")
-            for a in item.get("authorships", [])
-        ]
-
         doi = item.get("doi", "")
         doi = doi.replace("https://doi.org/", "") if isinstance(doi, str) else ""
-
         records.append({
             "title": item.get("title", ""),
-            "authors": authors,
+            "authors": [a.get("author", {}).get("display_name", "") for a in item.get("authorships", [])],
             "year": item.get("publication_year", ""),
             "journal": source.get("display_name", ""),
             "publisher": source.get("host_organization_name", ""),
             "doi": doi,
             "url": item.get("id", ""),
             "database": "OpenAlex",
-            "global_citations": item.get("cited_by_count", ""),
-            "document_type": item.get("type", ""),
             "keywords": "; ".join(c.get("display_name", "") for c in item.get("concepts", [])[:8]),
         })
-
     return standardize(records)
 
 
 def search_pubmed(query: str, rows: int, email: str) -> List[Dict[str, str]]:
-    params = {
-        "db": "pubmed",
-        "term": query,
-        "retmax": min(rows, 100),
-        "retmode": "json",
-        "sort": "relevance",
-    }
+    params = {"db": "pubmed", "term": query, "retmax": min(rows, 100), "retmode": "json", "sort": "relevance"}
     if email:
         params["email"] = email
-
     s = requests.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi", params=params, timeout=25)
     s.raise_for_status()
     ids = s.json().get("esearchresult", {}).get("idlist", [])
-
     if not ids:
         return []
 
-    summary_params = {
-        "db": "pubmed",
-        "id": ",".join(ids[: min(rows, 100)]),
-        "retmode": "json",
-    }
+    params2 = {"db": "pubmed", "id": ",".join(ids), "retmode": "json"}
     if email:
-        summary_params["email"] = email
-
-    r = requests.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi", params=summary_params, timeout=25)
+        params2["email"] = email
+    r = requests.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi", params=params2, timeout=25)
     r.raise_for_status()
 
     result = r.json().get("result", {})
     records = []
-
     for pmid in result.get("uids", []):
         item = result.get(pmid, {})
-        authors = [a.get("name", "") for a in item.get("authors", [])]
-        article_ids = item.get("articleids", [])
         doi = ""
-        for aid in article_ids:
+        for aid in item.get("articleids", []):
             if aid.get("idtype") == "doi":
                 doi = aid.get("value", "")
                 break
-
         records.append({
             "title": item.get("title", ""),
-            "authors": authors,
+            "authors": [a.get("name", "") for a in item.get("authors", [])],
             "year": year_from_text(item.get("pubdate", "")),
             "journal": item.get("fulljournalname", "") or item.get("source", ""),
             "publisher": "NCBI/NLM",
             "doi": doi,
             "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
             "database": "PubMed",
-            "notes": item.get("pubtype", ""),
+            "notes": "; ".join(item.get("pubtype", [])) if isinstance(item.get("pubtype"), list) else item.get("pubtype", ""),
         })
-
     return standardize(records)
 
 
@@ -393,134 +355,102 @@ def search_semantic_scholar(query: str, rows: int, email: str) -> List[Dict[str,
     params = {
         "query": query,
         "limit": min(rows, 100),
-        "fields": "title,authors,year,venue,publicationVenue,externalIds,url,abstract,fieldsOfStudy,publicationTypes,citationCount"
+        "fields": "title,authors,year,venue,publicationVenue,externalIds,url,abstract,fieldsOfStudy,publicationTypes"
     }
-    headers = {"User-Agent": "BibliografiStreamlit/6.0"}
-    r = requests.get("https://api.semanticscholar.org/graph/v1/paper/search", params=params, headers=headers, timeout=25)
+    r = requests.get("https://api.semanticscholar.org/graph/v1/paper/search", params=params, timeout=25)
     r.raise_for_status()
 
     records = []
     for item in r.json().get("data", []):
-        external = item.get("externalIds") or {}
-        authors = [a.get("name", "") for a in item.get("authors", [])]
-        pub_venue = item.get("publicationVenue") or {}
-
+        ext = item.get("externalIds") or {}
+        venue = item.get("publicationVenue") or {}
         records.append({
             "title": item.get("title", ""),
-            "authors": authors,
+            "authors": [a.get("name", "") for a in item.get("authors", [])],
             "year": item.get("year", ""),
-            "journal": pub_venue.get("name", "") or item.get("venue", ""),
+            "journal": venue.get("name", "") or item.get("venue", ""),
             "publisher": "Semantic Scholar / AI2",
-            "doi": external.get("DOI", ""),
+            "doi": ext.get("DOI", ""),
             "url": item.get("url", ""),
             "database": "Semantic Scholar",
-            "global_citations": item.get("citationCount", ""),
             "abstract": item.get("abstract", ""),
             "keywords": "; ".join(item.get("fieldsOfStudy") or []),
             "notes": "; ".join(item.get("publicationTypes") or []),
         })
-
     return standardize(records)
 
 
 def search_doaj(query: str, rows: int, email: str) -> List[Dict[str, str]]:
-    params = {"pageSize": min(rows, 100)}
     url = f"https://doaj.org/api/search/articles/{requests.utils.quote(query)}"
-    r = requests.get(url, params=params, timeout=25)
+    r = requests.get(url, params={"pageSize": min(rows, 100)}, timeout=25)
     r.raise_for_status()
 
     records = []
     for item in r.json().get("results", []):
         bib = item.get("bibjson", {})
-        authors = [a.get("name", "") for a in bib.get("author", [])]
         journal = bib.get("journal", {}) or {}
+        doi = ""
+        for ident in bib.get("identifier", []) or []:
+            if ident.get("type", "").lower() == "doi":
+                doi = ident.get("id", "")
+                break
         links = bib.get("link", []) or []
         url_value = ""
         for link in links:
             if isinstance(link, dict) and link.get("url"):
                 url_value = link.get("url")
                 break
-
         records.append({
             "title": bib.get("title", ""),
-            "authors": authors,
+            "authors": [a.get("name", "") for a in bib.get("author", [])],
             "year": bib.get("year", ""),
             "journal": journal.get("title", ""),
             "publisher": bib.get("publisher", "") or journal.get("publisher", ""),
-            "doi": bib.get("identifier", [{}])[0].get("id", "") if bib.get("identifier") else "",
+            "doi": doi,
             "url": url_value,
             "database": "DOAJ",
             "abstract": bib.get("abstract", ""),
             "keywords": "; ".join(bib.get("keywords", []) or []),
             "notes": "Open Access Journal",
         })
-
     return standardize(records)
 
 
 def search_arxiv(query: str, rows: int, email: str) -> List[Dict[str, str]]:
-    params = {
-        "search_query": f"all:{query}",
-        "start": 0,
-        "max_results": min(rows, 100),
-        "sortBy": "relevance",
-        "sortOrder": "descending",
-    }
+    params = {"search_query": f"all:{query}", "start": 0, "max_results": min(rows, 100), "sortBy": "relevance", "sortOrder": "descending"}
     r = requests.get("https://export.arxiv.org/api/query", params=params, timeout=25)
     r.raise_for_status()
 
     root = ET.fromstring(r.content)
-    ns = {
-        "atom": "http://www.w3.org/2005/Atom",
-        "arxiv": "http://arxiv.org/schemas/atom",
-    }
-
+    ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
     records = []
     for entry in root.findall("atom:entry", ns):
-        title = entry.findtext("atom:title", default="", namespaces=ns)
-        published = entry.findtext("atom:published", default="", namespaces=ns)
-        summary = entry.findtext("atom:summary", default="", namespaces=ns)
-        arxiv_url = entry.findtext("atom:id", default="", namespaces=ns)
-        journal_ref = entry.findtext("arxiv:journal_ref", default="", namespaces=ns)
-        doi = entry.findtext("arxiv:doi", default="", namespaces=ns)
-
-        authors = []
-        for author in entry.findall("atom:author", ns):
-            name = author.findtext("atom:name", default="", namespaces=ns)
-            if name:
-                authors.append(name)
-
+        authors = [a.findtext("atom:name", default="", namespaces=ns) for a in entry.findall("atom:author", ns)]
         categories = [cat.attrib.get("term", "") for cat in entry.findall("atom:category", ns)]
-
         records.append({
-            "title": clean(title),
+            "title": clean(entry.findtext("atom:title", default="", namespaces=ns)),
             "authors": authors,
-            "year": year_from_text(published),
-            "journal": journal_ref or "arXiv",
+            "year": year_from_text(entry.findtext("atom:published", default="", namespaces=ns)),
+            "journal": entry.findtext("arxiv:journal_ref", default="", namespaces=ns) or "arXiv",
             "publisher": "arXiv",
-            "doi": doi,
-            "url": arxiv_url,
+            "doi": entry.findtext("arxiv:doi", default="", namespaces=ns),
+            "url": entry.findtext("atom:id", default="", namespaces=ns),
             "database": "arXiv",
-            "abstract": clean(summary),
+            "abstract": clean(entry.findtext("atom:summary", default="", namespaces=ns)),
             "keywords": "; ".join(categories),
             "notes": "Preprint",
         })
-
     return standardize(records)
 
 
 def search_europe_pmc(query: str, rows: int, email: str) -> List[Dict[str, str]]:
-    params = {
-        "query": query,
-        "pageSize": min(rows, 100),
-        "format": "json",
-        "resultType": "core",
-    }
+    params = {"query": query, "pageSize": min(rows, 100), "format": "json", "resultType": "core"}
     r = requests.get("https://www.ebi.ac.uk/europepmc/webservices/rest/search", params=params, timeout=25)
     r.raise_for_status()
 
     records = []
     for item in r.json().get("resultList", {}).get("result", []):
+        full_urls = item.get("fullTextUrlList", {}).get("fullTextUrl", []) if item.get("fullTextUrlList") else []
         records.append({
             "title": item.get("title", ""),
             "authors": item.get("authorString", ""),
@@ -528,54 +458,40 @@ def search_europe_pmc(query: str, rows: int, email: str) -> List[Dict[str, str]]
             "journal": item.get("journalTitle", ""),
             "publisher": "Europe PMC",
             "doi": item.get("doi", ""),
-            "url": item.get("fullTextUrlList", {}).get("fullTextUrl", [{}])[0].get("url", "") if item.get("fullTextUrlList") else "",
+            "url": full_urls[0].get("url", "") if full_urls else "",
             "database": "Europe PMC",
             "abstract": item.get("abstractText", ""),
-            "keywords": item.get("meshHeadingList", ""),
+            "keywords": clean(item.get("meshHeadingList", "")),
             "notes": item.get("pubType", ""),
         })
-
     return standardize(records)
 
 
-def search_core(query: str, rows: int, email: str) -> List[Dict[str, str]]:
-    """CORE can reject calls without API access. This function fails gracefully."""
-    params = {"q": query, "limit": min(rows, 100)}
-    r = requests.get("https://api.core.ac.uk/v3/search/works", params=params, timeout=25)
+def search_datacite(query: str, rows: int, email: str) -> List[Dict[str, str]]:
+    params = {"query": query, "page[size]": min(rows, 100)}
+    r = requests.get("https://api.datacite.org/dois", params=params, timeout=25)
     r.raise_for_status()
 
     records = []
-    for item in r.json().get("results", []):
-        authors = []
-        for a in item.get("authors", []) or []:
-            if isinstance(a, dict):
-                authors.append(a.get("name", ""))
-            else:
-                authors.append(str(a))
-
-        links = item.get("links") or []
-        url_value = ""
-        if links and isinstance(links[0], dict):
-            url_value = links[0].get("url", "")
-
-        journal = item.get("journal")
-        if isinstance(journal, dict):
-            journal = journal.get("title", "")
-
+    for item in r.json().get("data", []):
+        a = item.get("attributes", {})
+        titles = a.get("titles", []) or []
+        creators = a.get("creators", []) or []
+        descriptions = a.get("descriptions", []) or []
+        subjects = a.get("subjects", []) or []
         records.append({
-            "title": item.get("title", ""),
-            "authors": authors,
-            "year": year_from_text(item.get("publishedDate", "")),
-            "journal": journal or "",
-            "publisher": item.get("publisher", ""),
-            "doi": item.get("doi", ""),
-            "url": url_value,
-            "database": "CORE",
-            "abstract": item.get("abstract", ""),
-            "keywords": "; ".join(item.get("topics", []) or []),
-            "notes": "Open access repository",
+            "title": titles[0].get("title", "") if titles else "",
+            "authors": [c.get("name", "") for c in creators],
+            "year": a.get("publicationYear", ""),
+            "journal": a.get("container", {}).get("title", "") if isinstance(a.get("container"), dict) else "",
+            "publisher": a.get("publisher", ""),
+            "doi": a.get("doi", ""),
+            "url": a.get("url", ""),
+            "database": "DataCite",
+            "abstract": descriptions[0].get("description", "") if descriptions else "",
+            "keywords": "; ".join(s.get("subject", "") for s in subjects[:8]),
+            "notes": a.get("types", {}).get("resourceTypeGeneral", "") if isinstance(a.get("types"), dict) else "",
         })
-
     return standardize(records)
 
 
@@ -587,509 +503,230 @@ SOURCE_FUNCTIONS = {
     "DOAJ": search_doaj,
     "arXiv": search_arxiv,
     "Europe PMC": search_europe_pmc,
+    "DataCite": search_datacite,
+}
+
+
+# =========================================================
+# Bibliography analysis & relevance
+# =========================================================
+def keyword_tokens(theme: str) -> List[str]:
+    stopwords = {
+        "the", "and", "or", "of", "in", "on", "for", "to", "a", "an", "with", "by",
+        "dan", "atau", "yang", "di", "ke", "dari", "untuk", "dengan", "pada", "dalam",
+        "analysis", "analisis", "bibliometric", "bibliografi", "meta", "study", "research"
     }
+    return [t for t in re.findall(r"[A-Za-zÀ-ÿ0-9]+", theme.lower()) if len(t) >= 3 and t not in stopwords]
 
 
-# =========================
-# Exporters
-# =========================
-def to_csv(records: List[Dict[str, str]]) -> bytes:
-    """Export records safely, even when workflow adds extra fields."""
-    buf = io.StringIO()
-    extra_cols = []
-    for record in records:
-        for key in record.keys():
-            if key not in COLUMNS and key not in extra_cols:
-                extra_cols.append(key)
-    fieldnames = COLUMNS + extra_cols
-    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
-    writer.writeheader()
-    for record in records:
-        writer.writerow({col: record.get(col, "") for col in fieldnames})
-    return buf.getvalue().encode("utf-8-sig")
+def relevance_score(record: Dict[str, str], theme: str) -> float:
+    tokens = keyword_tokens(theme)
+    if not tokens:
+        return 0.0
+    title = record.get("title", "").lower()
+    abstract = record.get("abstract", "").lower()
+    keywords = record.get("keywords", "").lower()
+    journal = record.get("journal", "").lower()
+    score = 0.0
+    for token in tokens:
+        if token in title:
+            score += 3.0
+        if token in keywords:
+            score += 2.0
+        if token in abstract:
+            score += 1.5
+        if token in journal:
+            score += 0.5
+    phrase = theme.lower().strip()
+    if phrase and phrase in title:
+        score += 5
+    if phrase and phrase in abstract:
+        score += 3
+    return score
 
 
-def escape_bib(value: str) -> str:
-    return clean(value).replace("{", "").replace("}", "")
-
-
-def to_bibtex(records: List[Dict[str, str]]) -> str:
-    chunks = []
-    for i, r in enumerate(records, 1):
-        first_author = r.get("authors", "ref").split(";")[0]
-        key = re.sub(r"\W+", "", first_author + r.get("year", "") + str(i)) or f"ref{i}"
-        chunks.append(
-            "@article{" + key + ",\n" + "\n".join([
-                f"  title = {{{escape_bib(r.get('title', ''))}}},",
-                f"  author = {{{escape_bib(r.get('authors', '').replace(';', ' and '))}}},",
-                f"  year = {{{escape_bib(r.get('year', ''))}}},",
-                f"  journal = {{{escape_bib(r.get('journal', ''))}}},",
-                f"  publisher = {{{escape_bib(r.get('publisher', ''))}}},",
-                f"  doi = {{{escape_bib(r.get('doi', ''))}}},",
-                f"  url = {{{escape_bib(r.get('url', ''))}}}",
-            ]) + "\n}"
-        )
-    return "\n\n".join(chunks)
-
-
-def to_ris(records: List[Dict[str, str]]) -> str:
-    lines = []
+def filter_relevant(records: List[Dict[str, str]], theme: str, min_score: float) -> List[Dict[str, str]]:
+    out = []
     for r in records:
-        lines += ["TY  - JOUR", f"TI  - {r.get('title', '')}"]
-        for author in [a.strip() for a in r.get("authors", "").split(";") if a.strip()]:
-            lines.append(f"AU  - {author}")
-        lines += [
-            f"PY  - {r.get('year', '')}",
-            f"JO  - {r.get('journal', '')}",
-            f"DO  - {r.get('doi', '')}",
-            f"UR  - {r.get('url', '')}",
-            "ER  - "
-        ]
-    return "\n".join(lines)
+        score = relevance_score(r, theme)
+        if score >= min_score:
+            rr = dict(r)
+            rr["theme_relevance_score"] = f"{score:.2f}"
+            out.append(rr)
+    return sorted(out, key=lambda x: safe_float(x.get("theme_relevance_score"), 0), reverse=True)
 
 
-def to_vosviewer_net(records: List[Dict[str, str]]) -> str:
-    authors = {}
-    edges = Counter()
-
-    for r in records:
-        author_list = [a.strip() for a in r.get("authors", "").split(";") if a.strip()]
-        for a in author_list:
-            if a not in authors:
-                authors[a] = len(authors) + 1
-
-        for i in range(len(author_list)):
-            for j in range(i + 1, len(author_list)):
-                pair = tuple(sorted([author_list[i], author_list[j]]))
-                edges[pair] += 1
-
-    lines = [f"*Vertices {len(authors)}"]
-    for author, idx in authors.items():
-        lines.append(f'{idx} "{author}" 1.0')
-
-    lines.append("*Edges")
-    for (a, b), weight in edges.items():
-        lines.append(f"{authors[a]} {authors[b]} {weight}")
-
-    return "\n".join(lines)
+def select_sources(theme: str) -> List[str]:
+    text = theme.lower()
+    sources = ["Crossref", "OpenAlex", "Semantic Scholar", "DOAJ", "DataCite"]
+    if any(t in text for t in ["health", "medical", "clinical", "patient", "disease", "biomedical", "nursing", "public health", "kesehatan", "medis", "pasien"]):
+        sources += ["PubMed", "Europe PMC"]
+    if any(t in text for t in ["computer", "machine learning", "artificial intelligence", "ai", "deep learning", "algorithm", "software", "physics", "mathematics", "statistics", "quantum"]):
+        sources += ["arXiv"]
+    return list(dict.fromkeys([s for s in sources if s in SOURCE_FUNCTIONS]))
 
 
-# =========================
-# Analysis
-# =========================
-def add_records(new_records: List[Dict[str, str]]) -> None:
-    st.session_state.records = standardize(st.session_state.records + new_records)
+def add_records(records: List[Dict[str, str]]) -> None:
+    existing = st.session_state.get("records", [])
+    st.session_state.records = standardize(existing + records)
 
 
-def filter_records(records: List[Dict[str, str]], keyword: str, status_filter: str, sort_option: str) -> List[Dict[str, str]]:
-    shown = records
-
-    if keyword.strip():
-        q = keyword.lower()
-        shown = [r for r in shown if q in json.dumps(r, ensure_ascii=False).lower()]
-
-    if status_filter == "Terverifikasi/Kandidat":
-        shown = [
-            r for r in shown
-            if "candidate" in r.get("indexing_status", "").lower()
-            or "impact" in r.get("indexing_status", "").lower()
-        ]
-    elif status_filter == "Perlu Verifikasi":
-        shown = [r for r in shown if r.get("indexing_status", "") == "Needs verification"]
-
-    if sort_option == "Terbaru dulu":
-        shown = sorted(shown, key=lambda x: x.get("year", "") or "0", reverse=True)
-    elif sort_option == "Terlama dulu":
-        shown = sorted(shown, key=lambda x: x.get("year", "") or "9999")
-    elif sort_option == "Judul A-Z":
-        shown = sorted(shown, key=lambda x: x.get("title", "").lower())
-    elif sort_option == "Database":
-        shown = sorted(shown, key=lambda x: x.get("database", ""))
-
-    return shown
-
-
-def get_basic_metrics(records: List[Dict[str, str]]) -> Dict[str, object]:
+def get_metrics(records: List[Dict[str, str]]) -> Dict[str, float]:
     total = len(records)
-    with_doi = sum(1 for r in records if r.get("doi"))
-    with_abstract = sum(1 for r in records if r.get("abstract"))
-    with_keywords = sum(1 for r in records if r.get("keywords"))
-    scopus = sum(1 for r in records if "Scopus" in r.get("indexing_status", ""))
-    wos = sum(1 for r in records if "Web of Science" in r.get("indexing_status", ""))
-    high = sum(1 for r in records if "High" in r.get("indexing_status", ""))
-    need = sum(1 for r in records if r.get("indexing_status", "") == "Needs verification")
-
     authors = []
-    multi_author = 0
+    multi = 0
     for r in records:
         names = [a.strip() for a in r.get("authors", "").split(";") if a.strip()]
         authors.extend(names)
         if len(names) > 1:
-            multi_author += 1
-
+            multi += 1
     return {
         "total": total,
-        "with_doi": with_doi,
-        "with_abstract": with_abstract,
-        "with_keywords": with_keywords,
-        "scopus": scopus,
-        "wos": wos,
-        "high": high,
-        "need": need,
-        "authors_total": len(authors),
+        "with_doi": sum(1 for r in records if r.get("doi")),
+        "with_abstract": sum(1 for r in records if r.get("abstract")),
+        "with_keywords": sum(1 for r in records if r.get("keywords")),
+        "scopus": sum(1 for r in records if "Scopus" in r.get("indexing_status", "")),
+        "wos": sum(1 for r in records if "Web of Science" in r.get("indexing_status", "")),
+        "high": sum(1 for r in records if "High" in r.get("indexing_status", "")),
+        "need": sum(1 for r in records if r.get("indexing_status") == "Needs verification"),
         "authors_unique": len(set(authors)),
-        "collab_rate": (multi_author / total * 100) if total else 0,
-        "avg_authors": (len(authors) / total) if total else 0,
+        "avg_authors": len(authors) / total if total else 0,
+        "collab_rate": multi / total * 100 if total else 0,
     }
 
 
 def count_by(records: List[Dict[str, str]], field: str, limit: int = 15) -> Dict[str, int]:
-    counter = Counter()
+    c = Counter()
     for r in records:
         val = clean(r.get(field, "")) or "Unknown"
-        if field == "journal" and len(val) > 45:
+        if len(val) > 45:
             val = val[:45] + "..."
-        counter[val] += 1
-    return dict(counter.most_common(limit))
+        c[val] += 1
+    return dict(c.most_common(limit))
 
 
 def year_distribution(records: List[Dict[str, str]]) -> Dict[str, int]:
-    years = Counter()
+    c = Counter()
     for r in records:
-        year = r.get("year", "")
-        if year and year.isdigit():
-            years[year] += 1
-    return dict(sorted(years.items()))
+        y = r.get("year", "")
+        if y and str(y).isdigit():
+            c[str(y)] += 1
+    return dict(sorted(c.items()))
 
 
 def author_distribution(records: List[Dict[str, str]], limit: int = 15) -> Dict[str, int]:
-    counter = Counter()
+    c = Counter()
     for r in records:
         for a in [x.strip() for x in r.get("authors", "").split(";") if x.strip()]:
-            counter[a] += 1
-    return dict(counter.most_common(limit))
+            c[a] += 1
+    return dict(c.most_common(limit))
 
 
 def keyword_distribution(records: List[Dict[str, str]], limit: int = 20) -> Dict[str, int]:
-    counter = Counter()
+    c = Counter()
     for r in records:
-        parts = re.split(r";|,", r.get("keywords", ""))
-        for kw in [clean(x).lower() for x in parts if clean(x)]:
-            counter[kw] += 1
-    return dict(counter.most_common(limit))
+        for kw in re.split(r";|,", r.get("keywords", "")):
+            kw = clean(kw).lower()
+            if kw:
+                c[kw] += 1
+    return dict(c.most_common(limit))
 
 
-def coauthorship_summary(records: List[Dict[str, str]]) -> Dict[str, object]:
-    author_papers = Counter()
-    edges = Counter()
-
+# =========================================================
+# Screening, PRISMA, Risk of Bias
+# =========================================================
+def auto_screen(records: List[Dict[str, str]], criteria: Dict[str, object]) -> List[Dict[str, str]]:
+    screened = []
     for r in records:
-        authors = [a.strip() for a in r.get("authors", "").split(";") if a.strip()]
-        for a in authors:
-            author_papers[a] += 1
-        for i in range(len(authors)):
-            for j in range(i + 1, len(authors)):
-                edges[tuple(sorted([authors[i], authors[j]]))] += 1
+        reasons, status = [], "Included"
+        year = safe_float(r.get("year"), None)
+        min_year = criteria.get("min_year")
+        max_year = criteria.get("max_year")
 
-    possible_edges = len(author_papers) * (len(author_papers) - 1) / 2
-    density = (len(edges) / possible_edges) if possible_edges else 0
+        if min_year and year and year < min_year:
+            status = "Excluded"
+            reasons.append(f"tahun < {int(min_year)}")
+        if max_year and year and year > max_year:
+            status = "Excluded"
+            reasons.append(f"tahun > {int(max_year)}")
+        if criteria.get("only_doi") and not r.get("doi"):
+            status = "Excluded"
+            reasons.append("DOI kosong")
+        if criteria.get("only_indexed") and r.get("indexing_status") == "Needs verification":
+            status = "Maybe" if status != "Excluded" else status
+            reasons.append("indeks perlu verifikasi")
+        if criteria.get("must_have_abstract") and not r.get("abstract"):
+            status = "Maybe" if status != "Excluded" else status
+            reasons.append("abstrak kosong")
 
+        include_terms = [t.strip().lower() for t in criteria.get("include_terms", "").split(",") if t.strip()]
+        exclude_terms = [t.strip().lower() for t in criteria.get("exclude_terms", "").split(",") if t.strip()]
+        joined = json.dumps(r, ensure_ascii=False).lower()
+
+        if include_terms and not any(t in joined for t in include_terms):
+            status = "Maybe" if status != "Excluded" else status
+            reasons.append("belum jelas memenuhi kata kunci inklusi")
+        if exclude_terms and any(t in joined for t in exclude_terms):
+            status = "Excluded"
+            reasons.append("mengandung kata kunci eksklusi")
+
+        row = {col: r.get(col, "") for col in SCREENING_COLUMNS}
+        row["screening_status"] = status
+        row["screening_reason"] = "; ".join(reasons) if reasons else "memenuhi kriteria awal"
+        screened.append(row)
+    return screened
+
+
+def prisma_counts(found_total: int, unique_records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, str]]) -> Dict[str, int]:
+    included = sum(1 for r in screened if r.get("screening_status") == "Included")
+    maybe = sum(1 for r in screened if r.get("screening_status") == "Maybe")
+    excluded = sum(1 for r in screened if r.get("screening_status") == "Excluded")
     return {
-        "num_authors": len(author_papers),
-        "num_collaborations": len(edges),
-        "density": density,
-        "top_authors": author_papers.most_common(10),
-        "top_edges": edges.most_common(10),
+        "records_identified": found_total,
+        "records_after_duplicates": len(unique_records),
+        "records_screened": len(screened),
+        "records_excluded": excluded,
+        "full_text_assessed": included + maybe,
+        "studies_included_review": included,
+        "studies_included_meta": len(meta_studies),
     }
 
 
-
-def safe_int(value: object) -> int:
-    try:
-        return int(float(str(value).replace(",", ".").strip()))
-    except Exception:
-        return 0
-
-
-def split_multi(value: str) -> List[str]:
-    parts = re.split(r";|\||\n", clean(value))
-    return [p.strip() for p in parts if p.strip()]
-
-
-def citation_metrics(records: List[Dict[str, str]]) -> Dict[str, object]:
-    citations = [safe_int(r.get("global_citations", 0)) for r in records]
-    cited = [c for c in citations if c > 0]
-    sorted_cites = sorted(citations, reverse=True)
-    h_index = sum(1 for i, c in enumerate(sorted_cites, 1) if c >= i)
-    g_index = 0
-    total_so_far = 0
-    for i, c in enumerate(sorted_cites, 1):
-        total_so_far += c
-        if total_so_far >= i * i:
-            g_index = i
-    return {
-        "TC": sum(citations),
-        "AC": (sum(citations) / len(records)) if records else 0,
-        "NCP": len(cited),
-        "PCP": (len(cited) / len(records)) if records else 0,
-        "CCP": (sum(cited) / len(cited)) if cited else 0,
-        "h_index": h_index,
-        "g_index": g_index,
-        "i10": sum(1 for c in citations if c >= 10),
-        "top_cited": sorted(records, key=lambda r: safe_int(r.get("global_citations", 0)), reverse=True)[:15],
-    }
-
-
-def performance_table(records: List[Dict[str, str]], unit: str) -> List[Dict[str, object]]:
-    groups: Dict[str, List[Dict[str, str]]] = {}
-    if unit == "authors":
-        for r in records:
-            for a in split_multi(r.get("authors", "")):
-                groups.setdefault(a, []).append(r)
-    elif unit == "journals":
-        for r in records:
-            groups.setdefault(clean(r.get("journal", "Unknown")) or "Unknown", []).append(r)
-    elif unit == "countries":
-        for r in records:
-            for c in split_multi(r.get("countries", "")):
-                groups.setdefault(c, []).append(r)
-    else:
-        for r in records:
-            groups.setdefault(clean(r.get("database", "Unknown")) or "Unknown", []).append(r)
-
+def build_rob_from_meta(studies: List[Dict[str, str]]) -> List[Dict[str, str]]:
     rows = []
-    for name, items in groups.items():
-        years = sorted({safe_int(x.get("year")) for x in items if safe_int(x.get("year"))})
-        citations = [safe_int(x.get("global_citations", 0)) for x in items]
-        nca = sum(len(split_multi(x.get("authors", ""))) for x in items)
-        tp = len(items)
-        sa = sum(1 for x in items if len(split_multi(x.get("authors", ""))) == 1)
-        ca = sum(1 for x in items if len(split_multi(x.get("authors", ""))) > 1)
-        nay = len(years)
-        tc = sum(citations)
-        ncp = sum(1 for c in citations if c > 0)
+    for s in studies:
         rows.append({
-            "Unit": name[:90], "TP": tp, "NCA": nca, "SA": sa, "CA": ca,
-            "NAY": nay, "PAY": round(tp / nay, 2) if nay else 0,
-            "TC": tc, "AC": round(tc / tp, 2) if tp else 0,
-            "NCP": ncp, "PCP": round(ncp / tp, 2) if tp else 0,
-            "CCP": round(tc / ncp, 2) if ncp else 0,
-            "CI": round((nca / tp) / tp, 3) if tp else 0,
-            "CC": round(1 - (tp / nca), 3) if nca else 0,
-        })
-    return sorted(rows, key=lambda x: (x["TP"], x["TC"]), reverse=True)[:50]
-
-
-def co_word_network(records: List[Dict[str, str]], limit: int = 30) -> Dict[str, object]:
-    kw_counter = Counter()
-    edges = Counter()
-    for r in records:
-        text_keywords = split_multi(r.get("keywords", ""))
-        if not text_keywords:
-            raw = (r.get("title", "") + " " + r.get("abstract", "")).lower()
-            words = re.findall(r"[a-zA-Z][a-zA-Z\-]{3,}", raw)
-            stop = {"this","that","with","from","have","were","been","analysis","study","research","paper","using","based","results","method","methods"}
-            text_keywords = [w for w in words if w not in stop][:12]
-        kws = list(dict.fromkeys([clean(k).lower() for k in text_keywords if clean(k)]))[:15]
-        for k in kws:
-            kw_counter[k] += 1
-        for i in range(len(kws)):
-            for j in range(i + 1, len(kws)):
-                edges[tuple(sorted([kws[i], kws[j]]))] += 1
-    return {"nodes": kw_counter.most_common(limit), "edges": edges.most_common(limit)}
-
-
-def bibliographic_coupling(records: List[Dict[str, str]], limit: int = 20) -> List[Dict[str, object]]:
-    pairs = []
-    ref_sets = []
-    for r in records:
-        refs = {x.lower() for x in split_multi(r.get("references", "")) if len(x) > 3}
-        ref_sets.append(refs)
-    for i in range(len(records)):
-        for j in range(i + 1, len(records)):
-            shared = ref_sets[i] & ref_sets[j]
-            if shared:
-                pairs.append({
-                    "Paper 1": records[i].get("title", "")[:70],
-                    "Paper 2": records[j].get("title", "")[:70],
-                    "Shared references": len(shared),
-                    "Strength": len(shared),
-                })
-    return sorted(pairs, key=lambda x: x["Strength"], reverse=True)[:limit]
-
-
-def co_citation_analysis(records: List[Dict[str, str]], limit: int = 30) -> Dict[str, object]:
-    ref_count = Counter()
-    co_edges = Counter()
-    for r in records:
-        refs = list(dict.fromkeys([x.lower() for x in split_multi(r.get("references", "")) if len(x) > 3]))[:50]
-        for ref in refs:
-            ref_count[ref] += 1
-        for i in range(len(refs)):
-            for j in range(i + 1, len(refs)):
-                co_edges[tuple(sorted([refs[i], refs[j]]))] += 1
-    return {"top_references": ref_count.most_common(limit), "co_cited_pairs": co_edges.most_common(limit)}
-
-
-def citation_relationships(records: List[Dict[str, str]], limit: int = 20) -> List[Dict[str, object]]:
-    rows = []
-    for r in sorted(records, key=lambda x: safe_int(x.get("global_citations", 0)), reverse=True)[:limit]:
-        rows.append({
-            "Title": r.get("title", "")[:85],
-            "Year": r.get("year", ""),
-            "Journal": r.get("journal", "")[:45],
-            "Global citations": safe_int(r.get("global_citations", 0)),
-            "Local citations": safe_int(r.get("local_citations", 0)),
-            "DOI": r.get("doi", ""),
+            "study_id": s.get("study_id", ""),
+            "randomization": "Unclear",
+            "blinding": "Unclear",
+            "incomplete_data": "Unclear",
+            "selective_reporting": "Unclear",
+            "confounding_control": "Unclear",
+            "sample_size_adequate": "Unclear",
+            "overall_risk": "Unclear",
+            "notes": "Isi manual berdasarkan full-text."
         })
     return rows
 
 
-def network_metrics_summary(records: List[Dict[str, str]]) -> List[Dict[str, object]]:
-    author_papers = Counter()
-    degree = Counter()
-    weighted_degree = Counter()
-    edges = Counter()
-    for r in records:
-        authors = split_multi(r.get("authors", ""))
-        for a in authors:
-            author_papers[a] += 1
-        for i in range(len(authors)):
-            for j in range(i + 1, len(authors)):
-                pair = tuple(sorted([authors[i], authors[j]]))
-                edges[pair] += 1
-    for (a,b), w in edges.items():
-        degree[a] += 1; degree[b] += 1
-        weighted_degree[a] += w; weighted_degree[b] += w
-    rows=[]
-    for a, tp in author_papers.most_common(50):
-        rows.append({
-            "Author": a, "TP": tp,
-            "Degree centrality": degree[a],
-            "Weighted degree": weighted_degree[a],
-            "Approx. eigen/prestige": round((degree[a] * max(1, weighted_degree[a])) ** 0.5, 3),
-        })
-    return rows
+def score_rob(row: Dict[str, str]) -> str:
+    fields = ["randomization", "blinding", "incomplete_data", "selective_reporting", "confounding_control", "sample_size_adequate"]
+    vals = [clean(row.get(f, "Unclear")).lower() for f in fields]
+    high = sum(1 for v in vals if "high" in v or "tidak" in v or "no" == v)
+    low = sum(1 for v in vals if "low" in v or "ya" in v or "yes" == v)
+    if high >= 2:
+        return "High risk"
+    if low >= 4 and high == 0:
+        return "Low risk"
+    return "Moderate/Unclear risk"
 
 
-def methodology_checklist(records: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    m = get_basic_metrics(records)
-    return [
-        {"Step": "1. Define aims and scope", "Output in app": "Formulasi tujuan, scope, keyword, periode, dan database pada tab Metodologi.", "Status": "Siap" if records else "Isi data dulu"},
-        {"Step": "2. Choose techniques", "Output in app": "Performance analysis, citation analysis, co-citation, bibliographic coupling, co-word, co-authorship.", "Status": "Siap"},
-        {"Step": "3. Collect and clean data", "Output in app": f"{m['total']} dokumen, DOI {m['with_doi']}, abstrak {m['with_abstract']}, keyword {m['with_keywords']}.", "Status": "Perlu validasi manual" if m['need'] else "Cukup baik"},
-        {"Step": "4. Run analysis and report", "Output in app": "Tab Insight, Science Mapping, laporan TXT, dan ekspor VOSviewer/CiteSpace.", "Status": "Siap" if records else "Belum ada data"},
-    ]
-
-
-def to_citespace(records: List[Dict[str, str]]) -> str:
-    lines = []
-    for r in records:
-        lines.append("%0 Journal Article")
-        lines.append(f"%T {r.get('title','')}")
-        for a in split_multi(r.get("authors", ""))[:20]:
-            lines.append(f"%A {a}")
-        lines.append(f"%J {r.get('journal','')}")
-        lines.append(f"%D {r.get('year','')}")
-        if r.get("doi"):
-            lines.append(f"%R {r.get('doi')}")
-        if r.get("url"):
-            lines.append(f"%U {r.get('url')}")
-        if r.get("abstract"):
-            lines.append(f"%X {r.get('abstract')[:1000]}")
-        if r.get("keywords"):
-            lines.append(f"%K {r.get('keywords')}")
-        if r.get("references"):
-            for ref in split_multi(r.get("references", ""))[:100]:
-                lines.append(f"%Z REF: {ref}")
-        lines.append("")
-    return "\n".join(lines)
-
-def build_report(records: List[Dict[str, str]]) -> str:
-    m = get_basic_metrics(records)
-    years = year_distribution(records)
-    top_authors = author_distribution(records, 10)
-    top_journals = count_by(records, "journal", 10)
-    top_keywords = keyword_distribution(records, 10)
-    top_db = count_by(records, "database", 20)
-
-    period = "N/A"
-    if years:
-        period = f"{min(years.keys())} - {max(years.keys())}"
-
-    return f"""LAPORAN ANALISIS BIBLIOMETRIK
-
-Ringkasan:
-- Total dokumen: {m['total']}
-- Periode publikasi: {period}
-- DOI tersedia: {m['with_doi']}
-- Abstrak tersedia: {m['with_abstract']}
-- Keywords tersedia: {m['with_keywords']}
-
-Sumber data:
-{chr(10).join([f"- {k}: {v}" for k, v in top_db.items()]) or "-"}
-
-Kualitas dan indeksasi:
-- Kandidat Scopus: {m['scopus']}
-- Kandidat Web of Science: {m['wos']}
-- Kandidat high impact: {m['high']}
-- Perlu verifikasi: {m['need']}
-
-Kolaborasi:
-- Total penulis: {m['authors_total']}
-- Penulis unik: {m['authors_unique']}
-- Rata-rata penulis per dokumen: {m['avg_authors']:.2f}
-- Persentase dokumen kolaboratif: {m['collab_rate']:.1f}%
-
-Top penulis:
-{chr(10).join([f"- {k}: {v}" for k, v in top_authors.items()]) or "-"}
-
-Top jurnal:
-{chr(10).join([f"- {k}: {v}" for k, v in top_journals.items()]) or "-"}
-
-Top keyword:
-{chr(10).join([f"- {k}: {v}" for k, v in top_keywords.items()]) or "-"}
-
-Catatan:
-Status Scopus/WoS/high impact pada aplikasi ini bersifat kandidat berbasis metadata.
-Validasi akhir tetap perlu dilakukan manual melalui Scopus, Web of Science, JCR, SJR, atau laman resmi jurnal.
-"""
-
-
-
-# =========================
-# Meta-Analytic Analysis Utilities
-# =========================
-META_COLUMNS = [
-    "study_id", "year", "group", "effect_size", "standard_error", "variance",
-    "weight_fixed", "weight_random", "lower_ci", "upper_ci", "notes"
-]
-
-
-def _safe_float(value, default=None):
-    try:
-        if value is None or str(value).strip() == "":
-            return default
-        return float(str(value).replace(",", "."))
-    except Exception:
-        return default
-
-
-def _normal_cdf(x: float) -> float:
-    # Standard normal CDF using math.erf to avoid scipy dependency.
-    import math
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-
+# =========================================================
+# Meta-analysis
+# =========================================================
 def compute_smd(n_t, mean_t, sd_t, n_c, mean_c, sd_c):
-    """Hedges g and SE from two independent groups."""
-    import math
-    n_t = _safe_float(n_t)
-    mean_t = _safe_float(mean_t)
-    sd_t = _safe_float(sd_t)
-    n_c = _safe_float(n_c)
-    mean_c = _safe_float(mean_c)
-    sd_c = _safe_float(sd_c)
+    n_t, mean_t, sd_t = safe_float(n_t), safe_float(mean_t), safe_float(sd_t)
+    n_c, mean_c, sd_c = safe_float(n_c), safe_float(mean_c), safe_float(sd_c)
     if not all(v is not None for v in [n_t, mean_t, sd_t, n_c, mean_c, sd_c]) or n_t <= 1 or n_c <= 1 or sd_t <= 0 or sd_c <= 0:
         return None, None
     pooled = math.sqrt(((n_t - 1) * sd_t ** 2 + (n_c - 1) * sd_c ** 2) / (n_t + n_c - 2))
@@ -1102,197 +739,169 @@ def compute_smd(n_t, mean_t, sd_t, n_c, mean_c, sd_c):
     return g, math.sqrt(var_g)
 
 
-def compute_log_or(a, b, c, d):
-    """Log odds ratio and SE from 2x2 table: event_t, non_event_t, event_c, non_event_c."""
-    import math
-    a = _safe_float(a)
-    b = _safe_float(b)
-    c = _safe_float(c)
-    d = _safe_float(d)
+def compute_log_or(event_t, non_event_t, event_c, non_event_c):
+    a, b, c, d = safe_float(event_t), safe_float(non_event_t), safe_float(event_c), safe_float(non_event_c)
     if not all(v is not None for v in [a, b, c, d]):
         return None, None
-    # Haldane-Anscombe correction for zeros.
     if min(a, b, c, d) == 0:
-        a += 0.5
-        b += 0.5
-        c += 0.5
-        d += 0.5
+        a += 0.5; b += 0.5; c += 0.5; d += 0.5
     if min(a, b, c, d) <= 0:
         return None, None
-    lor = math.log((a * d) / (b * c))
-    se = math.sqrt(1/a + 1/b + 1/c + 1/d)
-    return lor, se
+    return math.log((a * d) / (b * c)), math.sqrt(1/a + 1/b + 1/c + 1/d)
 
 
 def compute_log_rr(event_t, total_t, event_c, total_c):
-    """Log risk ratio and SE."""
-    import math
-    event_t = _safe_float(event_t)
-    total_t = _safe_float(total_t)
-    event_c = _safe_float(event_c)
-    total_c = _safe_float(total_c)
+    event_t, total_t, event_c, total_c = safe_float(event_t), safe_float(total_t), safe_float(event_c), safe_float(total_c)
     if not all(v is not None for v in [event_t, total_t, event_c, total_c]):
         return None, None
-    non_event_t = total_t - event_t
-    non_event_c = total_c - event_c
-    if min(event_t, non_event_t, event_c, non_event_c) == 0:
-        event_t += 0.5
-        non_event_t += 0.5
-        event_c += 0.5
-        non_event_c += 0.5
-        total_t = event_t + non_event_t
-        total_c = event_c + non_event_c
+    non_t, non_c = total_t - event_t, total_c - event_c
+    if min(event_t, non_t, event_c, non_c) == 0:
+        event_t += 0.5; non_t += 0.5; event_c += 0.5; non_c += 0.5
+        total_t, total_c = event_t + non_t, event_c + non_c
     if min(event_t, event_c, total_t, total_c) <= 0:
         return None, None
-    lrr = math.log((event_t / total_t) / (event_c / total_c))
-    se = math.sqrt((1/event_t) - (1/total_t) + (1/event_c) - (1/total_c))
-    return lrr, se
+    return math.log((event_t / total_t) / (event_c / total_c)), math.sqrt((1/event_t) - (1/total_t) + (1/event_c) - (1/total_c))
 
 
 def compute_fisher_z(r, n):
-    """Fisher z transformation for correlation meta-analysis."""
-    import math
-    r = _safe_float(r)
-    n = _safe_float(n)
+    r, n = safe_float(r), safe_float(n)
     if r is None or n is None or n <= 3 or r <= -1 or r >= 1:
         return None, None
-    z = 0.5 * math.log((1 + r) / (1 - r))
-    se = math.sqrt(1 / (n - 3))
-    return z, se
+    return 0.5 * math.log((1 + r) / (1 - r)), math.sqrt(1 / (n - 3))
 
 
-def parse_meta_csv_bytes(data: bytes):
-    """Parse meta-analysis CSV. Supports generic yi/sei and raw study columns."""
+def bibliographic_to_meta_format(records: List[Dict[str, str]], theme: str) -> List[Dict[str, str]]:
+    rows = []
+    for i, r in enumerate(records, 1):
+        first_author = clean(r.get("authors", "")).split(";")[0].strip()
+        rows.append({
+            "include": "yes",
+            "study_id": f"{first_author} {r.get('year', '')}".strip() or f"Study {i}",
+            "authors": r.get("authors", ""),
+            "year": r.get("year", ""),
+            "title": r.get("title", ""),
+            "journal": r.get("journal", ""),
+            "doi": r.get("doi", ""),
+            "group": theme or "Overall",
+            "effect_type": "",
+            "effect_size": "",
+            "standard_error": "",
+            "n_t": "", "mean_t": "", "sd_t": "", "n_c": "", "mean_c": "", "sd_c": "",
+            "event_t": "", "total_t": "", "event_c": "", "total_c": "",
+            "non_event_t": "", "non_event_c": "", "r": "", "n": "",
+            "outcome": theme,
+            "population": "",
+            "intervention": "",
+            "comparison": "",
+            "notes": "Isi effect size/SE dari full-text atau isi data mentah sesuai effect_type."
+        })
+    return rows
+
+
+def parse_meta_csv(data: bytes) -> Tuple[List[Dict[str, object]], int]:
     text = data.decode("utf-8-sig", errors="replace")
     try:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
     except csv.Error:
         dialect = csv.excel
-    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
-    rows = list(reader)
-    return standardize_meta_rows(rows)
+    rows = list(csv.DictReader(io.StringIO(text), dialect=dialect))
+    studies, skipped = [], 0
 
-
-def standardize_meta_rows(rows):
-    studies = []
     for i, row in enumerate(rows, 1):
         lower = {str(k).strip().lower(): v for k, v in row.items()}
-        study_id = clean(
-            lower.get("study_id") or lower.get("study") or lower.get("author") or lower.get("title") or f"Study {i}"
-        )
-        year = year_from_text(
-            lower.get("year") or lower.get("publication_year") or lower.get("date") or ""
-        )
-        group = clean(lower.get("group") or lower.get("subgroup") or lower.get("moderator") or "Overall")
-        notes = clean(lower.get("notes") or lower.get("note") or "")
-
-        yi = _safe_float(lower.get("effect_size") or lower.get("yi") or lower.get("effect") or lower.get("g") or lower.get("d") or lower.get("logor") or lower.get("logrr") or lower.get("z"))
-        sei = _safe_float(lower.get("standard_error") or lower.get("se") or lower.get("sei"))
-        vi = _safe_float(lower.get("variance") or lower.get("var") or lower.get("vi"))
-
-        if yi is None or (sei is None and vi is None):
-            effect_type = clean(lower.get("effect_type") or lower.get("type") or "").lower()
-
-            if effect_type in ["smd", "hedges", "hedges_g", "cohen_d", "d", "g"] or any(k in lower for k in ["mean_t", "mean_control"]):
-                yi, sei = compute_smd(
-                    lower.get("n_t") or lower.get("n_treatment") or lower.get("nt"),
-                    lower.get("mean_t") or lower.get("mean_treatment") or lower.get("mt"),
-                    lower.get("sd_t") or lower.get("sd_treatment") or lower.get("sdt"),
-                    lower.get("n_c") or lower.get("n_control") or lower.get("nc"),
-                    lower.get("mean_c") or lower.get("mean_control") or lower.get("mc"),
-                    lower.get("sd_c") or lower.get("sd_control") or lower.get("sdc"),
-                )
-
-            elif effect_type in ["or", "log_or", "odds_ratio", "logor"] or any(k in lower for k in ["event_t", "non_event_t"]):
-                yi, sei = compute_log_or(
-                    lower.get("event_t") or lower.get("a"),
-                    lower.get("non_event_t") or lower.get("b"),
-                    lower.get("event_c") or lower.get("c"),
-                    lower.get("non_event_c") or lower.get("d"),
-                )
-
-            elif effect_type in ["rr", "risk_ratio", "log_rr", "logrr"] or any(k in lower for k in ["total_t", "total_c"]):
-                yi, sei = compute_log_rr(
-                    lower.get("event_t") or lower.get("events_treatment"),
-                    lower.get("total_t") or lower.get("n_t") or lower.get("n_treatment"),
-                    lower.get("event_c") or lower.get("events_control"),
-                    lower.get("total_c") or lower.get("n_c") or lower.get("n_control"),
-                )
-
-            elif effect_type in ["correlation", "r", "fisher_z"] or "r" in lower:
-                yi, sei = compute_fisher_z(lower.get("r"), lower.get("n"))
-
-        if yi is None:
-            continue
-        if sei is None and vi is not None and vi > 0:
-            import math
-            sei = math.sqrt(vi)
-        if sei is None or sei <= 0:
+        include = clean(lower.get("include", "yes")).lower()
+        if include in ["no", "n", "0", "false", "exclude", "tidak"]:
             continue
 
-        vi = sei ** 2
+        study_id = clean(lower.get("study_id") or lower.get("study") or lower.get("title") or f"Study {i}")
+        year = year_from_text(lower.get("year", ""))
+        group = clean(lower.get("group") or lower.get("subgroup") or "Overall") or "Overall"
+        effect_type = clean(lower.get("effect_type") or lower.get("type") or "").lower()
+        notes = clean(lower.get("notes") or "")
+
+        yi = safe_float(lower.get("effect_size") or lower.get("yi") or lower.get("effect") or lower.get("g") or lower.get("d") or lower.get("logor") or lower.get("logrr") or lower.get("z"))
+        se = safe_float(lower.get("standard_error") or lower.get("se") or lower.get("sei"))
+        vi = safe_float(lower.get("variance") or lower.get("var") or lower.get("vi"))
+
+        if yi is None or (se is None and vi is None):
+            if effect_type in ["smd", "hedges", "hedges_g", "cohen_d", "d", "g"] or clean(lower.get("mean_t")):
+                yi, se = compute_smd(lower.get("n_t"), lower.get("mean_t"), lower.get("sd_t"), lower.get("n_c"), lower.get("mean_c"), lower.get("sd_c"))
+                effect_type = "SMD/Hedges g"
+            elif effect_type in ["or", "log_or", "odds_ratio", "logor"] or clean(lower.get("non_event_t")):
+                yi, se = compute_log_or(lower.get("event_t"), lower.get("non_event_t"), lower.get("event_c"), lower.get("non_event_c"))
+                effect_type = "log(OR)"
+            elif effect_type in ["rr", "risk_ratio", "log_rr", "logrr"] or (clean(lower.get("total_t")) and clean(lower.get("total_c"))):
+                yi, se = compute_log_rr(lower.get("event_t"), lower.get("total_t"), lower.get("event_c"), lower.get("total_c"))
+                effect_type = "log(RR)"
+            elif effect_type in ["correlation", "r", "fisher_z"] or clean(lower.get("r")):
+                yi, se = compute_fisher_z(lower.get("r"), lower.get("n"))
+                effect_type = "Fisher z"
+
+        if se is None and vi is not None and vi > 0:
+            se = math.sqrt(vi)
+
+        if yi is None or se is None or se <= 0:
+            skipped += 1
+            continue
+
         studies.append({
             "study_id": study_id,
             "year": year,
-            "group": group or "Overall",
+            "group": group,
+            "effect_type": effect_type or "Generic",
             "effect_size": yi,
-            "standard_error": sei,
-            "variance": vi,
+            "standard_error": se,
+            "variance": se ** 2,
             "notes": notes,
         })
-    return studies
+
+    return studies, skipped
 
 
-def meta_analysis(studies):
-    import math
-    clean_studies = []
+def normal_cdf(x: float) -> float:
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+
+def run_meta(studies: List[Dict[str, object]]) -> Dict[str, object]:
+    valid = []
     for s in studies:
-        yi = _safe_float(s.get("effect_size"))
-        sei = _safe_float(s.get("standard_error"))
-        vi = _safe_float(s.get("variance"))
-        if yi is None:
-            continue
-        if sei is None and vi is not None and vi > 0:
-            sei = math.sqrt(vi)
-        if sei is None or sei <= 0:
-            continue
-        vi = sei ** 2
-        clean_studies.append({**s, "effect_size": yi, "standard_error": sei, "variance": vi})
+        yi, se = safe_float(s.get("effect_size")), safe_float(s.get("standard_error"))
+        if yi is not None and se is not None and se > 0:
+            valid.append({**s, "effect_size": yi, "standard_error": se, "variance": se ** 2})
 
-    k = len(clean_studies)
+    k = len(valid)
     if k == 0:
         return {"k": 0, "studies": []}
 
-    weights_fe = [1 / s["variance"] for s in clean_studies]
-    sum_w = sum(weights_fe)
-    pooled_fe = sum(w * s["effect_size"] for w, s in zip(weights_fe, clean_studies)) / sum_w
-    se_fe = math.sqrt(1 / sum_w)
+    wf = [1 / s["variance"] for s in valid]
+    swf = sum(wf)
+    pooled_fe = sum(w * s["effect_size"] for w, s in zip(wf, valid)) / swf
+    se_fe = math.sqrt(1 / swf)
     ci_fe = (pooled_fe - 1.96 * se_fe, pooled_fe + 1.96 * se_fe)
-    z_fe = pooled_fe / se_fe if se_fe else 0
-    p_fe = 2 * (1 - _normal_cdf(abs(z_fe)))
+    z_fe = pooled_fe / se_fe
+    p_fe = 2 * (1 - normal_cdf(abs(z_fe)))
 
-    q = sum(w * (s["effect_size"] - pooled_fe) ** 2 for w, s in zip(weights_fe, clean_studies))
+    q = sum(w * (s["effect_size"] - pooled_fe) ** 2 for w, s in zip(wf, valid))
     df = k - 1
-    c = sum_w - (sum(w ** 2 for w in weights_fe) / sum_w) if sum_w else 0
-    tau2 = max(0, (q - df) / c) if c > 0 and k > 1 else 0
-    i2 = max(0, ((q - df) / q) * 100) if q > 0 and k > 1 else 0
+    c_val = swf - (sum(w ** 2 for w in wf) / swf) if swf else 0
+    tau2 = max(0, (q - df) / c_val) if c_val > 0 and k > 1 else 0
+    i2 = max(0, (q - df) / q * 100) if q > 0 and k > 1 else 0
 
-    weights_re = [1 / (s["variance"] + tau2) for s in clean_studies]
-    sum_wr = sum(weights_re)
-    pooled_re = sum(w * s["effect_size"] for w, s in zip(weights_re, clean_studies)) / sum_wr
-    se_re = math.sqrt(1 / sum_wr)
+    wr = [1 / (s["variance"] + tau2) for s in valid]
+    swr = sum(wr)
+    pooled_re = sum(w * s["effect_size"] for w, s in zip(wr, valid)) / swr
+    se_re = math.sqrt(1 / swr)
     ci_re = (pooled_re - 1.96 * se_re, pooled_re + 1.96 * se_re)
-    z_re = pooled_re / se_re if se_re else 0
-    p_re = 2 * (1 - _normal_cdf(abs(z_re)))
+    z_re = pooled_re / se_re
+    p_re = 2 * (1 - normal_cdf(abs(z_re)))
 
     enriched = []
-    for s, wf, wr in zip(clean_studies, weights_fe, weights_re):
-        yi = s["effect_size"]
-        se = s["standard_error"]
+    for s, a, b in zip(valid, wf, wr):
+        yi, se = s["effect_size"], s["standard_error"]
         enriched.append({
             **s,
-            "weight_fixed": wf / sum_w * 100 if sum_w else 0,
-            "weight_random": wr / sum_wr * 100 if sum_wr else 0,
+            "weight_fixed": a / swf * 100 if swf else 0,
+            "weight_random": b / swr * 100 if swr else 0,
             "lower_ci": yi - 1.96 * se,
             "upper_ci": yi + 1.96 * se,
         })
@@ -1306,2089 +915,678 @@ def meta_analysis(studies):
     }
 
 
-def subgroup_meta_analysis(studies):
-    groups = {}
-    for s in studies:
-        g = clean(s.get("group", "Overall")) or "Overall"
-        groups.setdefault(g, []).append(s)
-    return {g: meta_analysis(items) for g, items in groups.items()}
-
-
-def meta_to_csv(studies):
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=META_COLUMNS)
-    writer.writeheader()
-    for s in studies:
-        writer.writerow({col: s.get(col, "") for col in META_COLUMNS})
-    return buf.getvalue().encode("utf-8-sig")
-
-
-def build_meta_report(result, subgroup_results=None, model_name="Random-effects"):
-    if not result or result.get("k", 0) == 0:
-        return "Belum ada data meta-analysis yang valid."
-
-    m = result["random"] if model_name.startswith("Random") else result["fixed"]
-    h = result["heterogeneity"]
-    lines = [
-        "LAPORAN META-ANALYSIS",
-        "",
-        "Ringkasan:",
-        f"- Jumlah studi: {result['k']}",
-        f"- Model utama: {model_name}",
-        f"- Pooled effect: {m['pooled']:.4f}",
-        f"- 95% CI: {m['ci'][0]:.4f} sampai {m['ci'][1]:.4f}",
-        f"- z-value: {m['z']:.4f}",
-        f"- p-value: {m['p']:.6f}",
-        "",
-        "Heterogeneity:",
-        f"- Q: {h['Q']:.4f}",
-        f"- df: {h['df']}",
-        f"- tau²: {h['tau2']:.4f}",
-        f"- I²: {h['I2']:.2f}%",
-        "",
-        "Interpretasi singkat:",
-    ]
-    if h["I2"] < 30:
-        lines.append("- Heterogenitas rendah.")
-    elif h["I2"] < 60:
-        lines.append("- Heterogenitas sedang.")
-    else:
-        lines.append("- Heterogenitas tinggi; pertimbangkan subgroup analysis, moderator, atau sensitivity analysis.")
-
-    if subgroup_results:
-        lines += ["", "Subgroup analysis:"]
-        for g, res in subgroup_results.items():
-            if res.get("k", 0):
-                rm = res["random"]
-                lines.append(f"- {g}: k={res['k']}, pooled={rm['pooled']:.4f}, 95% CI={rm['ci'][0]:.4f} sampai {rm['ci'][1]:.4f}, I²={res['heterogeneity']['I2']:.2f}%")
-
-    lines += [
-        "",
-        "Catatan metodologis:",
-        "- Meta-analysis merangkum bukti empiris melalui ukuran efek dan hubungan antarvariabel.",
-        "- Pastikan studi cukup homogen secara desain, populasi, intervensi/eksposur, dan outcome.",
-        "- Periksa risiko bias, kriteria inklusi-eksklusi, dan konsistensi definisi outcome sebelum menarik kesimpulan.",
-    ]
-    return "\n".join(lines)
-
-
-def sample_meta_csv():
-    return """study_id,year,group,effect_size,standard_error,notes
-Smith 2020,2020,Education,0.35,0.12,Generic effect size
-Lee 2021,2021,Education,0.52,0.15,Generic effect size
-Garcia 2022,2022,Health,0.28,0.10,Generic effect size
-Chen 2023,2023,Health,0.61,0.20,Generic effect size
-Rahman 2024,2024,Technology,0.44,0.13,Generic effect size
-"""
-
-
-def sample_meta_raw_csv():
-    return """study_id,year,group,effect_type,n_t,mean_t,sd_t,n_c,mean_c,sd_c,notes
-Study A,2020,Education,smd,45,82.4,10.5,43,77.1,11.2,Raw SMD data
-Study B,2021,Education,smd,60,75.0,9.8,58,71.3,10.1,Raw SMD data
-Study C,2022,Education,smd,38,68.2,8.9,40,65.4,9.2,Raw SMD data
-"""
-
-
-def render_meta_analysis_tab():
-    st.subheader("🧪 Meta-Analytic Analysis")
-    st.caption("Analisis ini melengkapi bibliometric analysis dengan ringkasan bukti empiris berbasis effect size.")
-
-    if "meta_studies" not in st.session_state:
-        st.session_state.meta_studies = []
-
-    st.info(
-        "Gunakan tab ini jika data studi memiliki effect size, standard error, atau data mentah "
-        "seperti mean/SD dua kelompok, odds ratio, risk ratio, atau korelasi."
-    )
-
-    meta_input_tab, meta_result_tab, meta_guide_tab = st.tabs([
-        "📥 Input Data", "📊 Hasil Meta-Analysis", "📘 Panduan"
-    ])
-
-    with meta_input_tab:
-        st.write("### Upload Data Meta-Analysis")
-        uploaded_meta = st.file_uploader(
-            "Upload CSV meta-analysis",
-            type=["csv"],
-            key="meta_upload",
-            help="Kolom minimal: study_id,effect_size,standard_error. Bisa juga memakai data mentah SMD/OR/RR/korelasi."
-        )
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.download_button(
-                "📄 Template effect size",
-                data=sample_meta_csv().encode("utf-8"),
-                file_name="template_meta_effect_size.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        with c2:
-            st.download_button(
-                "📄 Template raw SMD",
-                data=sample_meta_raw_csv().encode("utf-8"),
-                file_name="template_meta_raw_smd.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        with c3:
-            if st.button("🧪 Muat sample meta", use_container_width=True):
-                st.session_state.meta_studies = parse_meta_csv_bytes(sample_meta_csv().encode("utf-8"))
-                st.success("Sample meta-analysis dimuat.")
-
-        if uploaded_meta and st.button("Proses CSV Meta-Analysis", type="primary", use_container_width=True):
-            try:
-                parsed = parse_meta_csv_bytes(uploaded_meta.getvalue())
-                st.session_state.meta_studies = parsed
-                st.success(f"Berhasil membaca {len(parsed)} studi valid.")
-            except Exception as exc:
-                st.error(f"Gagal membaca CSV meta-analysis: {exc}")
-
-        st.divider()
-        st.write("### Tambah Studi Manual")
-        with st.form("manual_meta_form"):
-            mode = st.selectbox(
-                "Jenis input",
-                ["Effect size + SE", "SMD dari mean/SD dua kelompok", "Log Odds Ratio dari 2x2", "Log Risk Ratio", "Korelasi Fisher z"]
-            )
-            study_id = st.text_input("Study ID", placeholder="Contoh: Smith 2022")
-            year = st.text_input("Tahun")
-            group = st.text_input("Subgroup/moderator", value="Overall")
-
-            yi = sei = None
-            notes = ""
-
-            if mode == "Effect size + SE":
-                effect_size = st.number_input("Effect size / yi", value=0.0, step=0.01, format="%.4f")
-                standard_error = st.number_input("Standard error / SE", min_value=0.0001, value=0.10, step=0.01, format="%.4f")
-                yi = effect_size
-                sei = standard_error
-                notes = "Generic effect size"
-
-            elif mode == "SMD dari mean/SD dua kelompok":
-                a, b, c = st.columns(3)
-                with a:
-                    n_t = st.number_input("n treatment", min_value=2, value=50)
-                    mean_t = st.number_input("mean treatment", value=75.0)
-                    sd_t = st.number_input("SD treatment", min_value=0.0001, value=10.0)
-                with b:
-                    n_c = st.number_input("n control", min_value=2, value=50)
-                    mean_c = st.number_input("mean control", value=70.0)
-                    sd_c = st.number_input("SD control", min_value=0.0001, value=10.0)
-                yi, sei = compute_smd(n_t, mean_t, sd_t, n_c, mean_c, sd_c)
-                notes = "Hedges g from two independent groups"
-                with c:
-                    st.metric("Hedges g", f"{yi:.4f}" if yi is not None else "Invalid")
-                    st.metric("SE", f"{sei:.4f}" if sei is not None else "Invalid")
-
-            elif mode == "Log Odds Ratio dari 2x2":
-                a1, a2, a3, a4 = st.columns(4)
-                with a1:
-                    event_t = st.number_input("event treatment", min_value=0, value=20)
-                with a2:
-                    non_event_t = st.number_input("non-event treatment", min_value=0, value=30)
-                with a3:
-                    event_c = st.number_input("event control", min_value=0, value=12)
-                with a4:
-                    non_event_c = st.number_input("non-event control", min_value=0, value=38)
-                yi, sei = compute_log_or(event_t, non_event_t, event_c, non_event_c)
-                notes = "Log odds ratio from 2x2 table"
-                st.metric("log(OR)", f"{yi:.4f}" if yi is not None else "Invalid")
-                st.metric("SE", f"{sei:.4f}" if sei is not None else "Invalid")
-
-            elif mode == "Log Risk Ratio":
-                a1, a2, a3, a4 = st.columns(4)
-                with a1:
-                    event_t = st.number_input("events treatment", min_value=0, value=20)
-                with a2:
-                    total_t = st.number_input("total treatment", min_value=1, value=50)
-                with a3:
-                    event_c = st.number_input("events control", min_value=0, value=12)
-                with a4:
-                    total_c = st.number_input("total control", min_value=1, value=50)
-                yi, sei = compute_log_rr(event_t, total_t, event_c, total_c)
-                notes = "Log risk ratio"
-                st.metric("log(RR)", f"{yi:.4f}" if yi is not None else "Invalid")
-                st.metric("SE", f"{sei:.4f}" if sei is not None else "Invalid")
-
-            else:
-                a1, a2 = st.columns(2)
-                with a1:
-                    r_value = st.number_input("Correlation r", min_value=-0.999, max_value=0.999, value=0.30, step=0.01)
-                with a2:
-                    n_value = st.number_input("Sample size n", min_value=4, value=100)
-                yi, sei = compute_fisher_z(r_value, n_value)
-                notes = "Fisher z from correlation"
-                st.metric("Fisher z", f"{yi:.4f}" if yi is not None else "Invalid")
-                st.metric("SE", f"{sei:.4f}" if sei is not None else "Invalid")
-
-            submitted = st.form_submit_button("Tambahkan studi", type="primary")
-
-        if submitted:
-            if yi is None or sei is None or sei <= 0:
-                st.error("Data studi tidak valid.")
-            else:
-                st.session_state.meta_studies.append({
-                    "study_id": study_id or f"Study {len(st.session_state.meta_studies)+1}",
-                    "year": year,
-                    "group": group or "Overall",
-                    "effect_size": yi,
-                    "standard_error": sei,
-                    "variance": sei ** 2,
-                    "notes": notes,
-                })
-                st.success("Studi ditambahkan.")
-
-        if st.session_state.meta_studies:
-            st.divider()
-            if st.button("🗑️ Kosongkan data meta-analysis"):
-                st.session_state.meta_studies = []
-                st.success("Data meta-analysis dikosongkan.")
-
-    with meta_result_tab:
-        studies = st.session_state.meta_studies
-        if not studies:
-            st.info("Belum ada data meta-analysis. Upload CSV, tambah manual, atau muat sample.")
-        else:
-            result = meta_analysis(studies)
-            subgroup_results = subgroup_meta_analysis(studies)
-
-            model_choice = st.radio("Model utama", ["Random-effects (DerSimonian-Laird)", "Fixed-effect"], horizontal=True)
-            main = result["random"] if model_choice.startswith("Random") else result["fixed"]
-            h = result["heterogeneity"]
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Jumlah studi", result["k"])
-            m2.metric("Pooled effect", f"{main['pooled']:.4f}")
-            m3.metric("95% CI", f"{main['ci'][0]:.3f} – {main['ci'][1]:.3f}")
-            m4.metric("p-value", f"{main['p']:.4f}")
-
-            h1, h2, h3, h4 = st.columns(4)
-            h1.metric("Q", f"{h['Q']:.3f}")
-            h2.metric("df", h["df"])
-            h3.metric("tau²", f"{h['tau2']:.4f}")
-            h4.metric("I²", f"{h['I2']:.1f}%")
-
-            if h["I2"] >= 60:
-                st.warning("Heterogenitas tinggi. Pertimbangkan subgroup analysis, moderator, atau sensitivity analysis.")
-            elif h["I2"] >= 30:
-                st.info("Heterogenitas sedang. Interpretasi pooled effect perlu hati-hati.")
-            else:
-                st.success("Heterogenitas rendah.")
-
-            st.divider()
-            st.write("### Tabel Studi dan Bobot")
-            display = []
-            for s in result["studies"]:
-                display.append({
-                    "Study": s.get("study_id", ""),
-                    "Year": s.get("year", ""),
-                    "Group": s.get("group", ""),
-                    "Effect": round(s.get("effect_size", 0), 4),
-                    "SE": round(s.get("standard_error", 0), 4),
-                    "95% CI": f"{s.get('lower_ci', 0):.3f} – {s.get('upper_ci', 0):.3f}",
-                    "Weight FE %": round(s.get("weight_fixed", 0), 2),
-                    "Weight RE %": round(s.get("weight_random", 0), 2),
-                })
-            st.dataframe(display, use_container_width=True, height=360)
-
-            st.write("### Forest Plot Sederhana")
-            st.caption("Visualisasi ringan tanpa matplotlib/plotly. Garis menunjukkan 95% CI; titik menunjukkan effect size.")
-            for s in result["studies"]:
-                yi = s["effect_size"]
-                lo = s["lower_ci"]
-                hi = s["upper_ci"]
-                label = f"{s.get('study_id','Study')} ({s.get('year','')})"
-                st.write(f"**{label}**: {yi:.3f} [{lo:.3f}, {hi:.3f}]")
-                st.progress(min(1.0, max(0.0, (yi + 2) / 4)))
-
-            st.write(f"**Pooled ({model_choice})**: {main['pooled']:.3f} [{main['ci'][0]:.3f}, {main['ci'][1]:.3f}]")
-
-            st.divider()
-            st.write("### Subgroup Analysis")
-            subgroup_display = []
-            for g, res in subgroup_results.items():
-                if res.get("k", 0):
-                    rm = res["random"]
-                    subgroup_display.append({
-                        "Group": g,
-                        "k": res["k"],
-                        "Pooled RE": round(rm["pooled"], 4),
-                        "95% CI": f"{rm['ci'][0]:.3f} – {rm['ci'][1]:.3f}",
-                        "I²": f"{res['heterogeneity']['I2']:.1f}%",
-                    })
-            st.dataframe(subgroup_display, use_container_width=True)
-
-            st.divider()
-            report = build_meta_report(result, subgroup_results, model_choice)
-            d1, d2 = st.columns(2)
-            with d1:
-                st.download_button(
-                    "📥 Download Data Meta CSV",
-                    data=meta_to_csv(result["studies"]),
-                    file_name="meta_analysis_data.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-            with d2:
-                st.download_button(
-                    "📥 Download Laporan Meta TXT",
-                    data=report.encode("utf-8"),
-                    file_name="laporan_meta_analysis.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-
-    with meta_guide_tab:
-        st.markdown("""
-### Format CSV yang didukung
-
-**1. Generic effect size**
-```csv
-study_id,year,group,effect_size,standard_error
-Smith 2020,2020,Education,0.35,0.12
-```
-
-**2. SMD / Hedges g dari dua kelompok**
-```csv
-study_id,year,group,effect_type,n_t,mean_t,sd_t,n_c,mean_c,sd_c
-Study A,2020,Education,smd,45,82.4,10.5,43,77.1,11.2
-```
-
-**3. Odds Ratio dari tabel 2x2**
-```csv
-study_id,effect_type,event_t,non_event_t,event_c,non_event_c
-Study A,or,20,30,12,38
-```
-
-**4. Risk Ratio**
-```csv
-study_id,effect_type,event_t,total_t,event_c,total_c
-Study A,rr,20,50,12,50
-```
-
-**5. Korelasi**
-```csv
-study_id,effect_type,r,n
-Study A,correlation,0.32,120
-```
-
-### Output
-- Fixed-effect pooled estimate
-- Random-effects pooled estimate
-- Q statistic
-- tau²
-- I²
-- subgroup analysis
-- forest plot sederhana
-- ekspor data dan laporan
-""")
-
-
-
-# =========================
-# Meta-Analysis Automatic Format & Result Processor
-# =========================
-META_EXTRACTION_COLUMNS = [
-    "include", "study_id", "authors", "year", "title", "journal", "doi", "group",
-    "effect_type", "effect_size", "standard_error",
-    "n_t", "mean_t", "sd_t", "n_c", "mean_c", "sd_c",
-    "event_t", "total_t", "event_c", "total_c",
-    "non_event_t", "non_event_c",
-    "r", "n", "outcome", "population", "intervention", "comparison", "notes"
-]
-
-META_RESULT_COLUMNS = [
-    "study_id", "year", "group", "effect_type", "effect_size", "standard_error",
-    "variance", "weight_fixed", "weight_random", "lower_ci", "upper_ci", "notes"
-]
-
-
-def _auto_float(value, default=None):
-    try:
-        if value is None or str(value).strip() == "":
-            return default
-        return float(str(value).replace(",", "."))
-    except Exception:
-        return default
-
-
-def _auto_normal_cdf(x: float) -> float:
-    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-
-def compute_meta_smd(n_t, mean_t, sd_t, n_c, mean_c, sd_c):
-    n_t = _auto_float(n_t)
-    mean_t = _auto_float(mean_t)
-    sd_t = _auto_float(sd_t)
-    n_c = _auto_float(n_c)
-    mean_c = _auto_float(mean_c)
-    sd_c = _auto_float(sd_c)
-
-    if not all(v is not None for v in [n_t, mean_t, sd_t, n_c, mean_c, sd_c]):
-        return None, None
-    if n_t <= 1 or n_c <= 1 or sd_t <= 0 or sd_c <= 0:
-        return None, None
-
-    pooled = math.sqrt(((n_t - 1) * sd_t ** 2 + (n_c - 1) * sd_c ** 2) / (n_t + n_c - 2))
-    if pooled <= 0:
-        return None, None
-
-    d = (mean_t - mean_c) / pooled
-    correction = 1 - (3 / (4 * (n_t + n_c) - 9))
-    g = correction * d
-    var_g = ((n_t + n_c) / (n_t * n_c)) + (g ** 2 / (2 * (n_t + n_c - 2)))
-    return g, math.sqrt(var_g)
-
-
-def compute_meta_log_or(event_t, non_event_t, event_c, non_event_c):
-    a = _auto_float(event_t)
-    b = _auto_float(non_event_t)
-    c = _auto_float(event_c)
-    d = _auto_float(non_event_c)
-
-    if not all(v is not None for v in [a, b, c, d]):
-        return None, None
-
-    if min(a, b, c, d) == 0:
-        a += 0.5
-        b += 0.5
-        c += 0.5
-        d += 0.5
-
-    if min(a, b, c, d) <= 0:
-        return None, None
-
-    yi = math.log((a * d) / (b * c))
-    se = math.sqrt(1/a + 1/b + 1/c + 1/d)
-    return yi, se
-
-
-def compute_meta_log_rr(event_t, total_t, event_c, total_c):
-    event_t = _auto_float(event_t)
-    total_t = _auto_float(total_t)
-    event_c = _auto_float(event_c)
-    total_c = _auto_float(total_c)
-
-    if not all(v is not None for v in [event_t, total_t, event_c, total_c]):
-        return None, None
-
-    non_event_t = total_t - event_t
-    non_event_c = total_c - event_c
-
-    if min(event_t, non_event_t, event_c, non_event_c) == 0:
-        event_t += 0.5
-        non_event_t += 0.5
-        event_c += 0.5
-        non_event_c += 0.5
-        total_t = event_t + non_event_t
-        total_c = event_c + non_event_c
-
-    if min(event_t, event_c, total_t, total_c) <= 0:
-        return None, None
-
-    yi = math.log((event_t / total_t) / (event_c / total_c))
-    se = math.sqrt((1/event_t) - (1/total_t) + (1/event_c) - (1/total_c))
-    return yi, se
-
-
-def compute_meta_fisher_z(r, n):
-    r = _auto_float(r)
-    n = _auto_float(n)
-
-    if r is None or n is None or n <= 3 or r <= -1 or r >= 1:
-        return None, None
-
-    z = 0.5 * math.log((1 + r) / (1 - r))
-    se = math.sqrt(1 / (n - 3))
-    return z, se
-
-
-def bibliographic_records_to_meta_format(records):
-    rows = []
-    for i, r in enumerate(records, 1):
-        first_author = clean(r.get("authors", "")).split(";")[0].strip()
-        study_id = f"{first_author} {r.get('year', '')}".strip() or f"Study {i}"
-        rows.append({
-            "include": "yes",
-            "study_id": study_id,
-            "authors": r.get("authors", ""),
-            "year": r.get("year", ""),
-            "title": r.get("title", ""),
-            "journal": r.get("journal", ""),
-            "doi": r.get("doi", ""),
-            "group": "Overall",
-            "effect_type": "",
-            "effect_size": "",
-            "standard_error": "",
-            "n_t": "", "mean_t": "", "sd_t": "", "n_c": "", "mean_c": "", "sd_c": "",
-            "event_t": "", "total_t": "", "event_c": "", "total_c": "",
-            "non_event_t": "", "non_event_c": "",
-            "r": "", "n": "",
-            "outcome": "",
-            "population": "",
-            "intervention": "",
-            "comparison": "",
-            "notes": "Isi effect_size + standard_error, atau isi data mentah sesuai effect_type.",
-        })
-    return rows
-
-
-def meta_rows_to_csv_auto(rows, columns=None):
-    if columns is None:
-        columns = META_EXTRACTION_COLUMNS
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
-    writer.writeheader()
-    for row in rows:
-        writer.writerow({col: row.get(col, "") for col in columns})
-    return buf.getvalue().encode("utf-8-sig")
-
-
-def parse_meta_auto_csv(data: bytes):
-    text = data.decode("utf-8-sig", errors="replace")
-    try:
-        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
-    except csv.Error:
-        dialect = csv.excel
-    return list(csv.DictReader(io.StringIO(text), dialect=dialect))
-
-
-def standardize_meta_auto_rows(rows):
-    studies = []
-    skipped = 0
-
-    for i, row in enumerate(rows, 1):
-        lower = {str(k).strip().lower(): v for k, v in row.items()}
-        include = clean(lower.get("include", "yes")).lower()
-        if include in ["no", "n", "0", "false", "exclude", "tidak"]:
-            continue
-
-        study_id = clean(lower.get("study_id") or lower.get("study") or lower.get("author") or lower.get("authors") or lower.get("title") or f"Study {i}")
-        year = year_from_text(lower.get("year") or lower.get("publication_year") or lower.get("date") or "")
-        group = clean(lower.get("group") or lower.get("subgroup") or lower.get("moderator") or "Overall") or "Overall"
-        effect_type = clean(lower.get("effect_type") or lower.get("type") or "").lower()
-        notes = clean(lower.get("notes") or lower.get("note") or "")
-
-        yi = _auto_float(lower.get("effect_size") or lower.get("yi") or lower.get("effect") or lower.get("g") or lower.get("d") or lower.get("logor") or lower.get("logrr") or lower.get("z"))
-        sei = _auto_float(lower.get("standard_error") or lower.get("se") or lower.get("sei"))
-        vi = _auto_float(lower.get("variance") or lower.get("var") or lower.get("vi"))
-
-        if yi is None or (sei is None and vi is None):
-            if effect_type in ["smd", "hedges", "hedges_g", "cohen_d", "d", "g"] or clean(lower.get("mean_t")) or clean(lower.get("mean_c")):
-                yi, sei = compute_meta_smd(
-                    lower.get("n_t") or lower.get("n_treatment") or lower.get("nt"),
-                    lower.get("mean_t") or lower.get("mean_treatment") or lower.get("mt"),
-                    lower.get("sd_t") or lower.get("sd_treatment") or lower.get("sdt"),
-                    lower.get("n_c") or lower.get("n_control") or lower.get("nc"),
-                    lower.get("mean_c") or lower.get("mean_control") or lower.get("mc"),
-                    lower.get("sd_c") or lower.get("sd_control") or lower.get("sdc"),
-                )
-                effect_type = "SMD/Hedges g"
-
-            elif effect_type in ["or", "log_or", "odds_ratio", "logor"] or clean(lower.get("non_event_t")):
-                yi, sei = compute_meta_log_or(
-                    lower.get("event_t") or lower.get("a"),
-                    lower.get("non_event_t") or lower.get("b"),
-                    lower.get("event_c") or lower.get("c"),
-                    lower.get("non_event_c") or lower.get("d"),
-                )
-                effect_type = "log(OR)"
-
-            elif effect_type in ["rr", "risk_ratio", "log_rr", "logrr"] or (clean(lower.get("total_t")) and clean(lower.get("total_c"))):
-                yi, sei = compute_meta_log_rr(
-                    lower.get("event_t") or lower.get("events_treatment"),
-                    lower.get("total_t") or lower.get("n_t") or lower.get("n_treatment"),
-                    lower.get("event_c") or lower.get("events_control"),
-                    lower.get("total_c") or lower.get("n_c") or lower.get("n_control"),
-                )
-                effect_type = "log(RR)"
-
-            elif effect_type in ["correlation", "r", "fisher_z"] or clean(lower.get("r")):
-                yi, sei = compute_meta_fisher_z(lower.get("r"), lower.get("n"))
-                effect_type = "Fisher z"
-
-        if sei is None and vi is not None and vi > 0:
-            sei = math.sqrt(vi)
-
-        if yi is None or sei is None or sei <= 0:
-            skipped += 1
-            continue
-
-        studies.append({
-            "study_id": study_id,
-            "year": year,
-            "group": group,
-            "effect_type": effect_type or "Generic",
-            "effect_size": yi,
-            "standard_error": sei,
-            "variance": sei ** 2,
-            "notes": notes,
-        })
-
-    return studies, skipped
-
-
-def run_meta_auto(studies):
-    valid = []
-    for s in studies:
-        yi = _auto_float(s.get("effect_size"))
-        sei = _auto_float(s.get("standard_error"))
-        vi = _auto_float(s.get("variance"))
-        if sei is None and vi is not None and vi > 0:
-            sei = math.sqrt(vi)
-        if yi is None or sei is None or sei <= 0:
-            continue
-        valid.append({**s, "effect_size": yi, "standard_error": sei, "variance": sei ** 2})
-
-    k = len(valid)
-    if k == 0:
-        return {"k": 0, "studies": []}
-
-    weights_fixed = [1 / s["variance"] for s in valid]
-    sum_wf = sum(weights_fixed)
-    pooled_fixed = sum(w * s["effect_size"] for w, s in zip(weights_fixed, valid)) / sum_wf
-    se_fixed = math.sqrt(1 / sum_wf)
-    ci_fixed = (pooled_fixed - 1.96 * se_fixed, pooled_fixed + 1.96 * se_fixed)
-    z_fixed = pooled_fixed / se_fixed
-    p_fixed = 2 * (1 - _auto_normal_cdf(abs(z_fixed)))
-
-    q = sum(w * (s["effect_size"] - pooled_fixed) ** 2 for w, s in zip(weights_fixed, valid))
-    df = k - 1
-    c_value = sum_wf - (sum(w ** 2 for w in weights_fixed) / sum_wf) if sum_wf else 0
-    tau2 = max(0, (q - df) / c_value) if c_value > 0 and k > 1 else 0
-    i2 = max(0, (q - df) / q * 100) if q > 0 and k > 1 else 0
-
-    weights_random = [1 / (s["variance"] + tau2) for s in valid]
-    sum_wr = sum(weights_random)
-    pooled_random = sum(w * s["effect_size"] for w, s in zip(weights_random, valid)) / sum_wr
-    se_random = math.sqrt(1 / sum_wr)
-    ci_random = (pooled_random - 1.96 * se_random, pooled_random + 1.96 * se_random)
-    z_random = pooled_random / se_random
-    p_random = 2 * (1 - _auto_normal_cdf(abs(z_random)))
-
-    enriched = []
-    for s, wf, wr in zip(valid, weights_fixed, weights_random):
-        yi = s["effect_size"]
-        se = s["standard_error"]
-        enriched.append({
-            **s,
-            "weight_fixed": wf / sum_wf * 100 if sum_wf else 0,
-            "weight_random": wr / sum_wr * 100 if sum_wr else 0,
-            "lower_ci": yi - 1.96 * se,
-            "upper_ci": yi + 1.96 * se,
-        })
-
-    return {
-        "k": k,
-        "studies": enriched,
-        "fixed": {"pooled": pooled_fixed, "se": se_fixed, "ci": ci_fixed, "z": z_fixed, "p": p_fixed},
-        "random": {"pooled": pooled_random, "se": se_random, "ci": ci_random, "z": z_random, "p": p_random},
-        "heterogeneity": {"Q": q, "df": df, "tau2": tau2, "I2": i2},
-    }
-
-
-def subgroup_meta_auto_processor(studies):
+def subgroup_meta(studies: List[Dict[str, object]]) -> Dict[str, Dict[str, object]]:
     groups = defaultdict(list)
     for s in studies:
         groups[clean(s.get("group", "Overall")) or "Overall"].append(s)
-    return {group: run_meta_auto(items) for group, items in groups.items()}
+    return {g: run_meta(items) for g, items in groups.items()}
 
 
-def meta_auto_result_csv(result):
-    return meta_rows_to_csv_auto(result.get("studies", []), META_RESULT_COLUMNS)
+def leave_one_out(studies: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    rows = []
+    for i, s in enumerate(studies):
+        rest = studies[:i] + studies[i+1:]
+        res = run_meta(rest)
+        if res.get("k", 0):
+            main = res["random"]
+            rows.append({
+                "removed_study": s.get("study_id", f"Study {i+1}"),
+                "k_remaining": res["k"],
+                "pooled_random": main["pooled"],
+                "lower_ci": main["ci"][0],
+                "upper_ci": main["ci"][1],
+                "I2": res["heterogeneity"]["I2"],
+            })
+    return rows
 
 
-def build_meta_auto_insight(result, subgroup_result=None, model="Random-effects"):
-    if not result or result.get("k", 0) == 0:
-        return "Belum ada data meta-analysis yang valid untuk diinterpretasikan."
-
-    main = result["random"] if model.startswith("Random") else result["fixed"]
-    h = result["heterogeneity"]
-    pooled = main["pooled"]
-    ci_low, ci_high = main["ci"]
-    p_value = main["p"]
-
-    direction = "positif" if pooled > 0 else "negatif" if pooled < 0 else "netral"
-    significance = "signifikan secara statistik" if p_value < 0.05 else "belum signifikan secara statistik"
-
-    if h["I2"] >= 60:
-        heterogeneity_label = "tinggi"
-    elif h["I2"] >= 30:
-        heterogeneity_label = "sedang"
-    else:
-        heterogeneity_label = "rendah"
-
-    lines = [
-        "INSIGHT META-ANALISIS OTOMATIS",
-        "",
-        "1. Ringkasan hasil utama",
-        f"- Jumlah studi yang dianalisis: {result['k']}.",
-        f"- Model utama: {model}.",
-        f"- Pooled effect = {pooled:.4f} dengan arah efek {direction}.",
-        f"- 95% confidence interval = {ci_low:.4f} sampai {ci_high:.4f}.",
-        f"- p-value = {p_value:.6f}, sehingga hasil {significance}.",
-        "",
-        "2. Heterogenitas",
-        f"- Q = {h['Q']:.4f}.",
-        f"- df = {h['df']}.",
-        f"- tau² = {h['tau2']:.4f}.",
-        f"- I² = {h['I2']:.2f}%, sehingga heterogenitas tergolong {heterogeneity_label}.",
-    ]
-
-    if h["I2"] >= 60:
-        lines.append("- Karena heterogenitas tinggi, hasil pooled effect perlu ditafsirkan hati-hati dan sebaiknya dilengkapi subgroup/moderator/sensitivity analysis.")
-    elif h["I2"] >= 30:
-        lines.append("- Heterogenitas sedang menunjukkan variasi antarstudi masih perlu diperhatikan.")
-    else:
-        lines.append("- Heterogenitas rendah menunjukkan hasil antarstudi relatif konsisten.")
-
-    if subgroup_result:
-        lines += ["", "3. Subgroup analysis"]
-        for group, res in subgroup_result.items():
-            if res.get("k", 0):
-                rm = res["random"]
-                lines.append(
-                    f"- {group}: k={res['k']}, pooled={rm['pooled']:.4f}, "
-                    f"95% CI {rm['ci'][0]:.4f} sampai {rm['ci'][1]:.4f}, "
-                    f"I²={res['heterogeneity']['I2']:.2f}%."
-                )
-
-    lines += [
-        "",
-        "4. Rekomendasi pelaporan",
-        "- Laporkan strategi pencarian, database, kriteria inklusi-eksklusi, proses screening, dan metode ekstraksi effect size.",
-        "- Jelaskan jenis effect size, model analisis, heterogenitas, dan alasan pemilihan fixed-effect atau random-effects.",
-        "- Jika format berasal dari bibliografi otomatis, isi effect size/SE dari full-text artikel terlebih dahulu sebelum menarik kesimpulan final.",
-        "- Untuk publikasi akademik, validasi kembali hasil dengan R metafor/meta, RevMan, JASP, Jamovi, Stata, atau software statistik lain.",
-    ]
-
-    return "\n".join(lines)
+def egger_test_approx(studies: List[Dict[str, object]]) -> Dict[str, object]:
+    valid = [s for s in studies if safe_float(s.get("standard_error")) and safe_float(s.get("effect_size")) is not None]
+    k = len(valid)
+    if k < 3:
+        return {"available": False, "reason": "minimal 3 studi diperlukan"}
+    x, y = [], []
+    for s in valid:
+        se = safe_float(s["standard_error"])
+        yi = safe_float(s["effect_size"])
+        precision = 1 / se
+        snd = yi / se
+        x.append(precision)
+        y.append(snd)
+    mx, my = sum(x)/k, sum(y)/k
+    sxx = sum((v-mx)**2 for v in x)
+    if sxx == 0:
+        return {"available": False, "reason": "precision tidak bervariasi"}
+    slope = sum((x[i]-mx)*(y[i]-my) for i in range(k)) / sxx
+    intercept = my - slope * mx
+    residuals = [y[i] - (intercept + slope*x[i]) for i in range(k)]
+    df = k - 2
+    if df <= 0:
+        return {"available": False, "reason": "jumlah studi terlalu kecil"}
+    mse = sum(e**2 for e in residuals) / df
+    se_intercept = math.sqrt(mse * (1/k + mx**2/sxx))
+    t = intercept / se_intercept if se_intercept else 0
+    # normal approximation for simplicity
+    p = 2 * (1 - normal_cdf(abs(t)))
+    return {"available": True, "intercept": intercept, "se": se_intercept, "t": t, "p": p}
 
 
-def render_meta_auto_tab():
-    st.subheader("🧪 Format Meta-Analisis & Olah Hasil Otomatis")
-    st.caption("Hasil bibliografi dapat dijadikan format ekstraksi meta-analysis, lalu data effect size diolah otomatis.")
-
-    if "meta_auto_studies" not in st.session_state:
-        st.session_state.meta_auto_studies = []
-
-    tab_format, tab_process, tab_result, tab_report = st.tabs([
-        "🧾 Format", "⚙️ Olah", "📊 Hasil", "📝 Insight"
-    ])
-
-    with tab_format:
-        st.write("### Jadikan Bibliografi ke Format Meta-Analisis")
-        records = st.session_state.get("records", [])
-
-        if records:
-            rows = bibliographic_records_to_meta_format(records)
-            st.success(f"{len(rows)} referensi berhasil disiapkan menjadi format ekstraksi meta-analysis.")
-
-            preview = []
-            for row in rows[:25]:
-                preview.append({
-                    "include": row["include"],
-                    "study_id": row["study_id"],
-                    "year": row["year"],
-                    "title": row["title"][:65] + ("..." if len(row["title"]) > 65 else ""),
-                    "effect_type": row["effect_type"],
-                    "effect_size": row["effect_size"],
-                    "standard_error": row["standard_error"],
-                })
-            st.dataframe(preview, use_container_width=True, height=320)
-
-            st.download_button(
-                "📥 Download Format Meta dari Hasil Bibliografi",
-                data=meta_rows_to_csv_auto(rows),
-                file_name="format_meta_analysis_dari_bibliografi.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        else:
-            st.info("Belum ada hasil bibliografi. Gunakan tab Cari/Upload terlebih dahulu, atau download template kosong di bawah.")
-
-        blank = [{col: "" for col in META_EXTRACTION_COLUMNS}]
-        blank[0]["include"] = "yes"
-        blank[0]["group"] = "Overall"
-        blank[0]["notes"] = "Isi effect_size + standard_error, atau isi data mentah sesuai effect_type."
-        st.download_button(
-            "📥 Download Template Meta-Analisis Kosong",
-            data=meta_rows_to_csv_auto(blank),
-            file_name="template_meta_analysis_kosong.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-        st.info("Alur: download format → isi effect size/SE atau data mentah dari full-text artikel → upload kembali di tab Olah.")
-
-    with tab_process:
-        st.write("### Upload Format Meta-Analisis yang Sudah Diisi")
-        uploaded = st.file_uploader("Upload CSV meta-analysis", type=["csv"], key="meta_auto_upload_final")
-
-        st.markdown("""
-**Kolom yang bisa diproses otomatis:**
-- `effect_size` + `standard_error`
-- `smd` dari `n_t`, `mean_t`, `sd_t`, `n_c`, `mean_c`, `sd_c`
-- `or` dari `event_t`, `non_event_t`, `event_c`, `non_event_c`
-- `rr` dari `event_t`, `total_t`, `event_c`, `total_c`
-- `correlation` dari `r` dan `n`
-""")
-
-        sample_rows = [
-            {
-                "include": "yes", "study_id": "Smith 2020", "authors": "Smith", "year": "2020",
-                "title": "Sample study A", "journal": "Journal A", "doi": "", "group": "Education",
-                "effect_type": "smd", "effect_size": "", "standard_error": "",
-                "n_t": "45", "mean_t": "82.4", "sd_t": "10.5", "n_c": "43", "mean_c": "77.1", "sd_c": "11.2",
-                "event_t": "", "total_t": "", "event_c": "", "total_c": "", "non_event_t": "", "non_event_c": "",
-                "r": "", "n": "", "outcome": "Learning outcome", "population": "Students",
-                "intervention": "Digital learning", "comparison": "Conventional", "notes": "Raw SMD"
-            },
-            {
-                "include": "yes", "study_id": "Lee 2021", "authors": "Lee", "year": "2021",
-                "title": "Sample study B", "journal": "Journal B", "doi": "", "group": "Education",
-                "effect_type": "", "effect_size": "0.52", "standard_error": "0.15",
-                "n_t": "", "mean_t": "", "sd_t": "", "n_c": "", "mean_c": "", "sd_c": "",
-                "event_t": "", "total_t": "", "event_c": "", "total_c": "", "non_event_t": "", "non_event_c": "",
-                "r": "", "n": "", "outcome": "Achievement", "population": "Students",
-                "intervention": "AI learning", "comparison": "Traditional", "notes": "Generic effect"
-            },
-            {
-                "include": "yes", "study_id": "Garcia 2022", "authors": "Garcia", "year": "2022",
-                "title": "Sample study C", "journal": "Journal C", "doi": "", "group": "Health",
-                "effect_type": "", "effect_size": "0.28", "standard_error": "0.10",
-                "n_t": "", "mean_t": "", "sd_t": "", "n_c": "", "mean_c": "", "sd_c": "",
-                "event_t": "", "total_t": "", "event_c": "", "total_c": "", "non_event_t": "", "non_event_c": "",
-                "r": "", "n": "", "outcome": "Health outcome", "population": "Patients",
-                "intervention": "Intervention", "comparison": "Control", "notes": "Generic effect"
-            },
-        ]
-
-        st.download_button(
-            "📄 Download Contoh CSV Terisi",
-            data=meta_rows_to_csv_auto(sample_rows),
-            file_name="contoh_meta_analysis_terisi.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if uploaded and st.button("⚙️ Proses & Hitung Meta-Analysis", type="primary", use_container_width=True):
-                rows = parse_meta_auto_csv(uploaded.getvalue())
-                studies, skipped = standardize_meta_auto_rows(rows)
-                st.session_state.meta_auto_studies = studies
-                st.success(f"Berhasil diproses: {len(studies)} studi valid. Dilewati: {skipped} baris.")
-
-        with c2:
-            if st.button("🧪 Pakai Sample dan Langsung Olah", use_container_width=True):
-                studies, skipped = standardize_meta_auto_rows(sample_rows)
-                st.session_state.meta_auto_studies = studies
-                st.success(f"Sample diproses: {len(studies)} studi valid.")
-
-    with tab_result:
-        st.write("### Hasil Meta-Analysis")
-        studies = st.session_state.get("meta_auto_studies", [])
-
-        if not studies:
-            st.info("Belum ada data yang diolah. Upload CSV di tab Olah.")
-        else:
-            result = run_meta_auto(studies)
-            subgroup = subgroup_meta_auto_processor(studies)
-            model = st.radio("Model utama", ["Random-effects", "Fixed-effect"], horizontal=True, key="meta_auto_model_final")
-            main = result["random"] if model.startswith("Random") else result["fixed"]
-            h = result["heterogeneity"]
-
-            a, b, c, d = st.columns(4)
-            a.metric("Jumlah studi", result["k"])
-            b.metric("Pooled effect", f"{main['pooled']:.4f}")
-            c.metric("95% CI", f"{main['ci'][0]:.3f} – {main['ci'][1]:.3f}")
-            d.metric("p-value", f"{main['p']:.4f}")
-
-            e, f, g, hcol = st.columns(4)
-            e.metric("Q", f"{h['Q']:.3f}")
-            f.metric("df", h["df"])
-            g.metric("tau²", f"{h['tau2']:.4f}")
-            hcol.metric("I²", f"{h['I2']:.1f}%")
-
-            if h["I2"] >= 60:
-                st.warning("Heterogenitas tinggi. Gunakan subgroup/moderator/sensitivity analysis.")
-            elif h["I2"] >= 30:
-                st.info("Heterogenitas sedang. Interpretasi pooled effect perlu hati-hati.")
-            else:
-                st.success("Heterogenitas rendah.")
-
-            st.divider()
-            table = []
-            for s in result["studies"]:
-                table.append({
-                    "Study": s.get("study_id", ""),
-                    "Year": s.get("year", ""),
-                    "Group": s.get("group", ""),
-                    "Type": s.get("effect_type", ""),
-                    "Effect": round(s.get("effect_size", 0), 4),
-                    "SE": round(s.get("standard_error", 0), 4),
-                    "95% CI": f"{s.get('lower_ci', 0):.3f} – {s.get('upper_ci', 0):.3f}",
-                    "Weight RE %": round(s.get("weight_random", 0), 2),
-                })
-            st.dataframe(table, use_container_width=True, height=360)
-
-            st.write("### Forest Plot Sederhana")
-            for s in result["studies"]:
-                st.code(
-                    f"{s.get('study_id','Study')[:28]:28} "
-                    f"{s['effect_size']: .3f} "
-                    f"[{s['lower_ci']:.3f}, {s['upper_ci']:.3f}]"
-                )
-            st.code(f"{'POOLED':28} {main['pooled']: .3f} [{main['ci'][0]:.3f}, {main['ci'][1]:.3f}]")
-
-            st.write("### Subgroup Analysis")
-            sub_table = []
-            for group, res in subgroup.items():
-                if res.get("k", 0):
-                    rm = res["random"]
-                    sub_table.append({
-                        "Group": group,
-                        "k": res["k"],
-                        "Pooled RE": round(rm["pooled"], 4),
-                        "95% CI": f"{rm['ci'][0]:.3f} – {rm['ci'][1]:.3f}",
-                        "I²": f"{res['heterogeneity']['I2']:.1f}%",
-                    })
-            st.dataframe(sub_table, use_container_width=True)
-
-    with tab_report:
-        st.write("### Insight dan Laporan Otomatis")
-        studies = st.session_state.get("meta_auto_studies", [])
-
-        if not studies:
-            st.info("Belum ada data hasil olahan.")
-        else:
-            result = run_meta_auto(studies)
-            subgroup = subgroup_meta_auto_processor(studies)
-            model = st.session_state.get("meta_auto_model_final", "Random-effects")
-            insight = build_meta_auto_insight(result, subgroup, model)
-
-            st.text_area("Insight otomatis", value=insight, height=430)
-
-            d1, d2 = st.columns(2)
-            with d1:
-                st.download_button(
-                    "📥 Download Hasil Meta CSV",
-                    data=meta_auto_result_csv(result),
-                    file_name="hasil_meta_analysis.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-            with d2:
-                st.download_button(
-                    "📥 Download Insight TXT",
-                    data=insight.encode("utf-8"),
-                    file_name="insight_meta_analysis.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-
-
-
-# =========================
-# Unified Theme Workflow: Bibliography + Meta-analysis
-# =========================
-def keyword_tokens_for_theme(theme: str) -> List[str]:
-    stopwords = {
-        "the", "and", "or", "of", "in", "on", "for", "to", "a", "an", "with", "by",
-        "dan", "atau", "yang", "di", "ke", "dari", "untuk", "dengan", "pada", "dalam",
-        "analisis", "analysis", "bibliometric", "bibliografi", "meta", "study", "research",
-    }
-    tokens = re.findall(r"[A-Za-zÀ-ÿ0-9]+", theme.lower())
-    return [t for t in tokens if len(t) >= 3 and t not in stopwords]
-
-
-def relevance_score_for_theme(record: Dict[str, str], theme: str) -> float:
-    tokens = keyword_tokens_for_theme(theme)
-    if not tokens:
-        return 0.0
-
-    title = record.get("title", "").lower()
-    abstract = record.get("abstract", "").lower()
-    keywords = record.get("keywords", "").lower()
-    journal = record.get("journal", "").lower()
-
-    score = 0.0
-    for token in tokens:
-        if token in title:
-            score += 3.0
-        if token in keywords:
-            score += 2.0
-        if token in abstract:
-            score += 1.5
-        if token in journal:
-            score += 0.5
-
-    phrase = theme.lower().strip()
-    if phrase and phrase in title:
-        score += 5.0
-    if phrase and phrase in abstract:
-        score += 3.0
-
-    return score
-
-
-def filter_theme_records(records: List[Dict[str, str]], theme: str, min_score: float = 1.0) -> List[Dict[str, str]]:
-    scored = []
-    for record in records:
-        score = relevance_score_for_theme(record, theme)
-        if score >= min_score:
-            enriched = dict(record)
-            enriched["theme_relevance_score"] = f"{score:.2f}"
-            scored.append(enriched)
-    return sorted(scored, key=lambda x: float(x.get("theme_relevance_score", "0")), reverse=True)
-
-
-def auto_select_sources_for_theme(theme: str) -> List[str]:
-    text = theme.lower()
-    sources = ["Crossref", "OpenAlex", "Semantic Scholar", "DOAJ"]
-
-    health_terms = ["health", "medical", "medicine", "clinical", "patient", "disease", "biomedical", "nursing", "public health", "kesehatan", "medis", "pasien"]
-    tech_terms = ["computer", "machine learning", "artificial intelligence", "ai", "deep learning", "algorithm", "software", "data science"]
-    physics_terms = ["physics", "mathematics", "statistic", "preprint", "quantum", "astronomy"]
-
-    if any(term in text for term in health_terms):
-        sources += ["PubMed", "Europe PMC"]
-    if any(term in text for term in tech_terms + physics_terms):
-        sources += ["arXiv"]
-
-    # keep order and remove missing/error-prone unavailable functions
-    available = [s for s in sources if s in SOURCE_FUNCTIONS]
-    return list(dict.fromkeys(available))
-
-
-def extract_effect_from_text_for_meta(record: Dict[str, str]):
-    text = " ".join([
-        record.get("title", ""),
-        record.get("abstract", ""),
-        record.get("notes", ""),
-    ])
-    clean_text = clean(text)
-
-    # Generic patterns: effect size = 0.35, Cohen's d = 0.5, Hedges g = 0.42
+def extract_effect_from_metadata(record: Dict[str, str]):
+    text = clean(" ".join([record.get("title", ""), record.get("abstract", ""), record.get("notes", "")]))
     patterns = [
-        (r"(?:effect\s*size|hedges'?s?\s*g|cohen'?s?\s*d|standardized\s*mean\s*difference|smd)\s*(?:=|:|was|of)?\s*(-?\d+(?:\.\d+)?)", "Generic/SMD"),
+        (r"(?:effect\s*size|hedges'?s?\s*g|cohen'?s?\s*d|smd)\s*(?:=|:|was|of)?\s*(-?\d+(?:\.\d+)?)", "Generic/SMD"),
         (r"(?:odds\s*ratio|or)\s*(?:=|:|was|of)?\s*(\d+(?:\.\d+)?)", "OR"),
         (r"(?:risk\s*ratio|relative\s*risk|rr)\s*(?:=|:|was|of)?\s*(\d+(?:\.\d+)?)", "RR"),
-        (r"(?:correlation|pearson'?s?\s*r|r)\s*(?:=|:|was|of)?\s*(-?0?\.\d+)", "Correlation"),
     ]
+    ci_match = re.search(r"(?:95\s*%?\s*ci|confidence\s*interval)\s*(?:=|:)?\s*\[?\s*(-?\d+(?:\.\d+)?)\s*(?:,|to|-|–)\s*(-?\d+(?:\.\d+)?)", text, flags=re.I)
 
-    ci_pattern = r"(?:95\s*%?\s*ci|confidence\s*interval)\s*(?:=|:)?\s*\[?\s*(-?\d+(?:\.\d+)?)\s*(?:,|to|-|–)\s*(-?\d+(?:\.\d+)?)\s*\]?"
-    ci_match = re.search(ci_pattern, clean_text, flags=re.I)
-
-    for pattern, effect_type in patterns:
-        m = re.search(pattern, clean_text, flags=re.I)
+    for pattern, typ in patterns:
+        m = re.search(pattern, text, flags=re.I)
         if not m:
             continue
-
-        value = _auto_float(m.group(1))
-        if value is None:
+        val = safe_float(m.group(1))
+        if val is None:
             continue
-
-        # Convert OR/RR to log scale for pooling.
-        if effect_type == "OR" and value > 0:
-            yi = math.log(value)
-            label = "log(OR) auto-extracted"
-        elif effect_type == "RR" and value > 0:
-            yi = math.log(value)
-            label = "log(RR) auto-extracted"
-        elif effect_type == "Correlation":
-            # no n available, cannot compute SE safely
-            yi = value
-            label = "Correlation detected; SE needs manual input"
-        else:
-            yi = value
-            label = "Effect size auto-extracted"
-
+        yi = math.log(val) if typ in ["OR", "RR"] and val > 0 else val
         se = None
         if ci_match:
-            lo = _auto_float(ci_match.group(1))
-            hi = _auto_float(ci_match.group(2))
+            lo, hi = safe_float(ci_match.group(1)), safe_float(ci_match.group(2))
             if lo is not None and hi is not None and hi != lo:
-                # If OR/RR CI is positive, convert to log CI.
-                if effect_type in ["OR", "RR"] and lo > 0 and hi > 0:
-                    lo = math.log(lo)
-                    hi = math.log(hi)
-                se = abs(hi - lo) / (2 * 1.96)
-
-        if se is not None and se > 0:
+                if typ in ["OR", "RR"] and lo > 0 and hi > 0:
+                    lo, hi = math.log(lo), math.log(hi)
+                se = abs(hi - lo) / 3.92
+        if se and se > 0:
             return {
                 "study_id": f"{record.get('authors', '').split(';')[0]} {record.get('year', '')}".strip() or record.get("title", "Study")[:40],
                 "year": record.get("year", ""),
                 "group": "Auto-extracted",
-                "effect_type": label,
+                "effect_type": typ,
                 "effect_size": yi,
                 "standard_error": se,
                 "variance": se ** 2,
-                "notes": "Auto-extracted from title/abstract. Verify with full-text before final use.",
+                "notes": "Auto-extracted from metadata. Verify with full-text."
             }
-
     return None
 
 
-def bibliographic_to_meta_theme_rows(records: List[Dict[str, str]], theme: str) -> List[Dict[str, str]]:
-    rows = bibliographic_records_to_meta_format(records)
-    for row in rows:
-        row["group"] = theme
-        row["outcome"] = theme
-        row["notes"] = "Tema sesuai pencarian. Isi effect size/SE dari full-text atau gunakan data mentah."
-    return rows
+# =========================================================
+# Exporters and reports
+# =========================================================
+def to_csv(records: List[Dict[str, str]]) -> bytes:
+    return safe_csv(records, COLUMNS)
 
 
-def build_bibliography_theme_insight(records: List[Dict[str, str]], theme: str) -> str:
+def escape_bib(value: str) -> str:
+    return clean(value).replace("{", "").replace("}", "")
+
+
+def to_bibtex(records: List[Dict[str, str]]) -> str:
+    chunks = []
+    for i, r in enumerate(records, 1):
+        first_author = r.get("authors", "ref").split(";")[0]
+        key = re.sub(r"\W+", "", first_author + r.get("year", "") + str(i)) or f"ref{i}"
+        chunks.append("@article{" + key + ",\n" + "\n".join([
+            f"  title = {{{escape_bib(r.get('title', ''))}}},",
+            f"  author = {{{escape_bib(r.get('authors', '').replace(';', ' and '))}}},",
+            f"  year = {{{escape_bib(r.get('year', ''))}}},",
+            f"  journal = {{{escape_bib(r.get('journal', ''))}}},",
+            f"  publisher = {{{escape_bib(r.get('publisher', ''))}}},",
+            f"  doi = {{{escape_bib(r.get('doi', ''))}}},",
+            f"  url = {{{escape_bib(r.get('url', ''))}}}",
+        ]) + "\n}")
+    return "\n\n".join(chunks)
+
+
+def build_biblio_report(records: List[Dict[str, str]], theme: str) -> str:
     if not records:
-        return "Belum ada referensi yang relevan dengan tema."
+        return "Belum ada data bibliografi."
+    m = get_metrics(records)
+    years = year_distribution(records)
+    dbs = count_by(records, "database", 15)
+    journals = count_by(records, "journal", 15)
+    authors = author_distribution(records, 15)
+    keywords = keyword_distribution(records, 15)
+    period = f"{min(years.keys())}–{max(years.keys())}" if years else "tidak tersedia"
+    doi_pct = m["with_doi"] / len(records) * 100 if records else 0
+    abs_pct = m["with_abstract"] / len(records) * 100 if records else 0
 
-    metrics = get_basic_metrics(records) if "get_basic_metrics" in globals() else {}
-    years = year_distribution(records) if "year_distribution" in globals() else {}
-    journals = count_by(records, "journal", 10) if "count_by" in globals() else {}
-    dbs = count_by(records, "database", 10) if "count_by" in globals() else {}
-    authors = author_distribution(records, 10) if "author_distribution" in globals() else {}
-    keywords = keyword_distribution(records, 10) if "keyword_distribution" in globals() else {}
+    return f"""LAPORAN BIBLIOGRAFI
 
-    period = "tidak tersedia"
-    if years:
-        period = f"{min(years.keys())}–{max(years.keys())}"
+Tema:
+{theme}
 
-    doi_pct = (metrics.get("with_doi", 0) / len(records) * 100) if records else 0
-    abstract_pct = (metrics.get("with_abstract", 0) / len(records) * 100) if records else 0
+Ringkasan:
+- Total referensi relevan: {len(records)}
+- Periode publikasi: {period}
+- DOI tersedia: {m['with_doi']} ({doi_pct:.1f}%)
+- Abstrak tersedia: {m['with_abstract']} ({abs_pct:.1f}%)
+- Penulis unik: {m['authors_unique']}
+- Rata-rata penulis per dokumen: {m['avg_authors']:.2f}
+- Tingkat kolaborasi: {m['collab_rate']:.1f}%
+- Kandidat Scopus: {m['scopus']}
+- Kandidat WoS: {m['wos']}
+- Kandidat high impact: {m['high']}
+- Perlu verifikasi: {m['need']}
+
+Distribusi sumber:
+{chr(10).join([f"- {k}: {v}" for k, v in dbs.items()]) or "-"}
+
+Jurnal dominan:
+{chr(10).join([f"- {k}: {v}" for k, v in journals.items()]) or "-"}
+
+Penulis dominan:
+{chr(10).join([f"- {k}: {v}" for k, v in authors.items()]) or "-"}
+
+Keyword dominan:
+{chr(10).join([f"- {k}: {v}" for k, v in keywords.items()]) or "-"}
+
+Rekomendasi:
+- Prioritaskan referensi dengan DOI, abstrak, dan relevansi tema tertinggi.
+- Validasi Scopus/WoS/JCR/SJR secara manual untuk artikel utama.
+- Untuk meta-analysis, lakukan full-text screening dan ekstraksi effect size/SE.
+"""
+
+
+def build_meta_report(result: Dict[str, object], subgroup: Dict[str, Dict[str, object]] | None = None, model: str = "Random-effects") -> str:
+    if not result or result.get("k", 0) == 0:
+        return "Belum ada hasil meta-analysis yang valid."
+    main = result["random"] if model.startswith("Random") else result["fixed"]
+    h = result["heterogeneity"]
+    direction = "positif" if main["pooled"] > 0 else "negatif" if main["pooled"] < 0 else "netral"
+    sig = "signifikan secara statistik" if main["p"] < 0.05 else "belum signifikan secara statistik"
+    hetero = "tinggi" if h["I2"] >= 60 else "sedang" if h["I2"] >= 30 else "rendah"
 
     lines = [
-        f"INSIGHT BIBLIOGRAFI UNTUK TEMA: {theme}",
+        "LAPORAN META-ANALYSIS",
         "",
-        "1. Ringkasan dataset",
-        f"- Total referensi relevan: {len(records)}.",
-        f"- Periode publikasi: {period}.",
-        f"- DOI tersedia: {metrics.get('with_doi', 0)} ({doi_pct:.1f}%).",
-        f"- Abstrak tersedia: {metrics.get('with_abstract', 0)} ({abstract_pct:.1f}%).",
-        f"- Kandidat Scopus/WoS/high impact: {metrics.get('scopus', 0) + metrics.get('wos', 0) + metrics.get('high', 0)}.",
+        f"- Jumlah studi: {result['k']}",
+        f"- Model utama: {model}",
+        f"- Pooled effect: {main['pooled']:.4f} ({direction})",
+        f"- 95% CI: {main['ci'][0]:.4f} sampai {main['ci'][1]:.4f}",
+        f"- p-value: {main['p']:.6f}; hasil {sig}",
+        f"- Q: {h['Q']:.4f}",
+        f"- df: {h['df']}",
+        f"- tau²: {h['tau2']:.4f}",
+        f"- I²: {h['I2']:.2f}% ({hetero})",
         "",
-        "2. Sumber data dominan",
+        "Interpretasi:",
     ]
-    lines += [f"- {k}: {v}" for k, v in dbs.items()] or ["- Tidak tersedia."]
+    if h["I2"] >= 60:
+        lines.append("- Heterogenitas tinggi. Gunakan subgroup, moderator, risk of bias, atau sensitivity analysis.")
+    elif h["I2"] >= 30:
+        lines.append("- Heterogenitas sedang. Interpretasi pooled effect perlu hati-hati.")
+    else:
+        lines.append("- Heterogenitas rendah. Hasil antarstudi relatif konsisten.")
 
-    lines += ["", "3. Jurnal dominan"]
-    lines += [f"- {k}: {v}" for k, v in journals.items()] or ["- Tidak tersedia."]
-
-    lines += ["", "4. Penulis dominan"]
-    lines += [f"- {k}: {v}" for k, v in authors.items()] or ["- Tidak tersedia."]
-
-    lines += ["", "5. Keyword/tema yang sering muncul"]
-    lines += [f"- {k}: {v}" for k, v in keywords.items()] or ["- Tidak tersedia."]
+    if subgroup:
+        lines += ["", "Subgroup analysis:"]
+        for g, res in subgroup.items():
+            if res.get("k", 0):
+                rm = res["random"]
+                lines.append(f"- {g}: k={res['k']}, pooled={rm['pooled']:.4f}, 95% CI {rm['ci'][0]:.4f}–{rm['ci'][1]:.4f}, I²={res['heterogeneity']['I2']:.2f}%")
 
     lines += [
         "",
-        "6. Rekomendasi",
-        "- Gunakan referensi dengan DOI dan abstrak lengkap sebagai prioritas screening.",
-        "- Validasi indeks Scopus/WoS/JCR/SJR secara manual untuk referensi kunci.",
-        "- Untuk meta-analysis, lanjutkan dengan full-text screening dan ekstraksi effect size/SE.",
+        "Catatan:",
+        "- Validasi effect size/SE dengan full-text artikel sebelum digunakan pada publikasi ilmiah.",
+        "- Untuk naskah final, bandingkan dengan software statistik seperti R metafor/meta, RevMan, JASP, Jamovi, atau Stata."
     ]
-
     return "\n".join(lines)
 
 
-def render_theme_biblio_meta_tab():
-    st.subheader("🔬 Tema → Bibliografi + Meta-Analisis")
-    st.caption("Workflow otomatis: cari tema, filter bibliografi relevan, siapkan format meta-analysis, dan olah effect size jika tersedia.")
-
-    if "theme_records" not in st.session_state:
-        st.session_state.theme_records = []
-    if "theme_meta_studies" not in st.session_state:
-        st.session_state.theme_meta_studies = []
-
-    tab_run, tab_biblio, tab_meta, tab_export = st.tabs([
-        "🔎 Proses Tema", "📚 Hasil Bibliografi", "🧪 Meta-Analisis", "📤 Export"
-    ])
-
-    with tab_run:
-        theme = st.text_input(
-            "Tema/topik penelitian",
-            placeholder="Contoh: artificial intelligence in education, digital learning achievement, public health intervention",
-            key="theme_workflow_query"
-        )
-        col_a, col_b = st.columns([2, 1])
-        with col_a:
-            mode = st.radio(
-                "Mode sumber",
-                ["Otomatis sesuai tema", "Pilih manual"],
-                horizontal=True,
-                key="theme_source_mode"
-            )
-        with col_b:
-            min_score = st.slider("Batas relevansi", 0.0, 5.0, 1.0, 0.5)
-
-        suggested = auto_select_sources_for_theme(theme) if theme else ["Crossref", "OpenAlex", "Semantic Scholar", "DOAJ"]
-        if mode == "Pilih manual":
-            selected_sources = st.multiselect(
-                "Sumber bibliografi",
-                [s for s in SOURCE_FUNCTIONS.keys() if s != "CORE"],
-                default=suggested,
-                key="theme_manual_sources"
-            )
-        else:
-            selected_sources = suggested
-            st.write("Sumber otomatis:", ", ".join(selected_sources))
-
-        max_rows = st.slider("Jumlah hasil per sumber", 5, 100, 20, 5, key="theme_rows")
-
-        if st.button("🚀 Cari Bibliografi & Siapkan Meta-Analisis", type="primary", use_container_width=True):
-            if not theme.strip():
-                st.warning("Tema belum diisi.")
-            elif not selected_sources:
-                st.warning("Tidak ada sumber yang dipilih.")
-            else:
-                found = []
-                errors = []
-                progress = st.progress(0)
-                status = st.empty()
-
-                for i, source in enumerate(selected_sources, start=1):
-                    status.info(f"Mencari dari {source}...")
-                    try:
-                        results = SOURCE_FUNCTIONS[source](theme, max_rows, email if "email" in globals() else "")
-                        found += results
-                        st.write(f"✅ {source}: {len(results)} record")
-                    except Exception as exc:
-                        errors.append(f"{source}: {exc}")
-                        st.write(f"⚠️ {source}: dilewati karena gagal/rate-limit")
-                    progress.progress(i / len(selected_sources))
-
-                unique_found = standardize(found)
-                relevant = filter_theme_records(unique_found, theme, min_score=min_score)
-
-                st.session_state.theme_records = relevant
-                # Also merge to global records so other tabs can use them.
-                add_records(relevant)
-
-                meta_rows = bibliographic_to_meta_theme_rows(relevant, theme)
-                auto_meta = []
-                for r in relevant:
-                    item = extract_effect_from_text_for_meta(r)
-                    if item:
-                        auto_meta.append(item)
-                st.session_state.theme_meta_studies = auto_meta
-
-                status.success(
-                    f"Selesai. Ditemukan {len(unique_found)} record unik, {len(relevant)} relevan dengan tema, "
-                    f"dan {len(auto_meta)} studi memiliki effect size yang dapat dibaca otomatis."
-                )
-
-                if errors:
-                    with st.expander("Sumber yang gagal/dilewati"):
-                        for err in errors:
-                            st.write(f"- {err}")
-
-                if not auto_meta:
-                    st.info("Belum ada effect size + CI/SE yang cukup jelas di metadata. Download format meta-analysis, isi dari full-text, lalu upload di tab Meta Otomatis.")
-
-    with tab_biblio:
-        records = st.session_state.get("theme_records", [])
-        theme = st.session_state.get("theme_workflow_query", "")
-
-        if not records:
-            st.info("Belum ada hasil. Jalankan proses di tab Proses Tema.")
-        else:
-            st.write(f"### Hasil Bibliografi Relevan: {theme}")
-            m = get_basic_metrics(records)
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Referensi relevan", len(records))
-            c2.metric("Dengan DOI", m.get("with_doi", 0))
-            c3.metric("Dengan abstrak", m.get("with_abstract", 0))
-            c4.metric("Kandidat indeks", m.get("scopus", 0) + m.get("wos", 0) + m.get("high", 0))
-
-            display = []
-            for r in records:
-                display.append({
-                    "Skor": r.get("theme_relevance_score", ""),
-                    "Judul": r.get("title", "")[:80] + ("..." if len(r.get("title", "")) > 80 else ""),
-                    "Tahun": r.get("year", ""),
-                    "Jurnal": r.get("journal", "")[:45],
-                    "Database": r.get("database", ""),
-                    "DOI": r.get("doi", ""),
-                })
-            st.dataframe(display, use_container_width=True, height=430)
-
-            st.write("### Insight Bibliografi")
-            insight = build_bibliography_theme_insight(records, theme)
-            st.text_area("Insight otomatis", value=insight, height=340)
-
-    with tab_meta:
-        records = st.session_state.get("theme_records", [])
-        auto_meta = st.session_state.get("theme_meta_studies", [])
-        theme = st.session_state.get("theme_workflow_query", "")
-
-        if not records:
-            st.info("Belum ada bibliografi tema. Jalankan proses terlebih dahulu.")
-        else:
-            st.write("### Format Meta-Analysis dari Tema")
-            meta_rows = bibliographic_to_meta_theme_rows(records, theme)
-            st.download_button(
-                "📥 Download Format Meta-Analysis Sesuai Tema",
-                data=meta_rows_to_csv_auto(meta_rows),
-                file_name="format_meta_analysis_sesuai_tema.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-
-            st.divider()
-            st.write("### Auto-extracted Meta-Analysis")
-            if not auto_meta:
-                st.warning(
-                    "Metadata/abstrak belum memuat effect size dan SE/CI yang cukup untuk meta-analysis otomatis. "
-                    "Silakan isi file format meta-analysis dari full-text, lalu upload di tab Meta Otomatis."
-                )
-            else:
-                result = run_meta_auto(auto_meta)
-                subgroup = subgroup_meta_auto_processor(auto_meta)
-                main = result["random"]
-                h = result["heterogeneity"]
-
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Studi valid", result["k"])
-                c2.metric("Pooled effect", f"{main['pooled']:.4f}")
-                c3.metric("95% CI", f"{main['ci'][0]:.3f} – {main['ci'][1]:.3f}")
-                c4.metric("I²", f"{h['I2']:.1f}%")
-
-                table = []
-                for s in result["studies"]:
-                    table.append({
-                        "Study": s.get("study_id", ""),
-                        "Year": s.get("year", ""),
-                        "Effect type": s.get("effect_type", ""),
-                        "Effect": round(s.get("effect_size", 0), 4),
-                        "SE": round(s.get("standard_error", 0), 4),
-                        "95% CI": f"{s.get('lower_ci', 0):.3f} – {s.get('upper_ci', 0):.3f}",
-                        "Notes": s.get("notes", ""),
-                    })
-                st.dataframe(table, use_container_width=True, height=320)
-
-                insight = build_meta_auto_insight(result, subgroup, "Random-effects")
-                st.text_area("Insight meta-analysis otomatis", value=insight, height=340)
-
-                st.download_button(
-                    "📥 Download Hasil Meta Otomatis CSV",
-                    data=meta_auto_result_csv(result),
-                    file_name="hasil_meta_otomatis_sesuai_tema.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-
-    with tab_export:
-        records = st.session_state.get("theme_records", [])
-        theme = st.session_state.get("theme_workflow_query", "tema")
-        safe_theme = re.sub(r"[^A-Za-z0-9_-]+", "_", theme.strip())[:60] or "tema"
-
-        if not records:
-            st.info("Belum ada data untuk diekspor.")
-        else:
-            meta_rows = bibliographic_to_meta_theme_rows(records, theme)
-            biblio_insight = build_bibliography_theme_insight(records, theme)
-            auto_meta = st.session_state.get("theme_meta_studies", [])
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button(
-                    "📥 Bibliografi CSV",
-                    data=to_csv(records),
-                    file_name=f"bibliografi_{safe_theme}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-                st.download_button(
-                    "📥 Bibliografi BibTeX",
-                    data=to_bibtex(records).encode("utf-8"),
-                    file_name=f"bibliografi_{safe_theme}.bib",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-                st.download_button(
-                    "📥 Insight Bibliografi TXT",
-                    data=biblio_insight.encode("utf-8"),
-                    file_name=f"insight_bibliografi_{safe_theme}.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-
-            with col2:
-                st.download_button(
-                    "📥 Format Meta-Analysis CSV",
-                    data=meta_rows_to_csv_auto(meta_rows),
-                    file_name=f"format_meta_analysis_{safe_theme}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-
-                if auto_meta:
-                    result = run_meta_auto(auto_meta)
-                    insight = build_meta_auto_insight(result, subgroup_meta_auto_processor(auto_meta), "Random-effects")
-                    st.download_button(
-                        "📥 Hasil Meta Otomatis CSV",
-                        data=meta_auto_result_csv(result),
-                        file_name=f"hasil_meta_otomatis_{safe_theme}.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                    )
-                    st.download_button(
-                        "📥 Insight Meta TXT",
-                        data=insight.encode("utf-8"),
-                        file_name=f"insight_meta_{safe_theme}.txt",
-                        mime="text/plain",
-                        use_container_width=True,
-                    )
+def build_final_summary(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_result: Dict[str, object], prisma: Dict[str, int]) -> str:
+    lines = [
+        "RINGKASAN AKHIR",
+        "",
+        f"Tema: {theme}",
+        "",
+        "PRISMA:",
+    ]
+    lines += [f"- {k}: {v}" for k, v in prisma.items()]
+    lines += ["", build_biblio_report(records, theme)]
+    if meta_result.get("k", 0):
+        lines += ["", build_meta_report(meta_result, subgroup_meta(st.session_state.get("meta_studies", [])), "Random-effects")]
+    else:
+        lines += ["", "Meta-analysis belum dapat dihitung karena effect size/SE belum tersedia atau belum valid."]
+    return "\n".join(lines)
 
 
-# =========================
+# =========================================================
 # Streamlit UI
-# =========================
-st.set_page_config(
-    page_title=APP_TITLE,
-    page_icon="📚",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+# =========================================================
+st.set_page_config(page_title=APP_TITLE, page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
-if "records" not in st.session_state:
-    st.session_state.records = []
+for key, default in {
+    "records": [],
+    "theme_records": [],
+    "found_total": 0,
+    "screened": [],
+    "meta_studies": [],
+    "rob_rows": [],
+    "last_theme": "",
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
-st.title("📚 Sistem Bibliografi Riset")
-st.caption(
-    "Kelola bibliografi dari banyak sumber kredibel: Crossref, OpenAlex, PubMed, Semantic Scholar, DOAJ, arXiv, Europe PMC, CORE, dan file ekspor Scopus/WoS."
-)
+st.title("📚 Sistem Bibliografi & Meta-Analisis")
+st.caption("Workflow rapi: tema → sumber kredibel → bibliografi → PRISMA screening → risk of bias → meta-analysis → sensitivity/publication bias → laporan.")
 
 with st.sidebar:
     st.header("⚙️ Pengaturan")
     email = st.text_input("Email opsional untuk API publik", placeholder="nama@email.com")
-    rows = st.slider("Jumlah hasil per sumber", 5, 100, 20, 5)
-
+    rows_per_source = st.slider("Hasil per sumber", 5, 100, 20, 5)
     st.divider()
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("🔄 Baru", use_container_width=True):
-            st.session_state.records = []
-            st.success("Data dikosongkan.")
+    if st.button("🔄 Reset Semua Data", use_container_width=True):
+        for key in ["records", "theme_records", "screened", "meta_studies", "rob_rows"]:
+            st.session_state[key] = []
+        st.session_state.found_total = 0
+        st.success("Semua data dikosongkan.")
 
-    with col_b:
-        if st.button("📥 Sample", use_container_width=True):
-            try:
-                from pathlib import Path
-                sample_path = Path(__file__).parent / "data" / "sample_references.csv"
-                with sample_path.open("rb") as f:
-                    parsed = parse_csv_bytes(f.read())
-                add_records(parsed)
-                st.success(f"Dimuat {len(parsed)} referensi.")
-            except Exception as exc:
-                st.error(f"Sample gagal dimuat: {exc}")
-
-theme_workflow_tab, search_tab, upload_tab, manual_tab, data_tab, insights_tab, mapping_tab, method_tab, meta_tab, meta_auto_tab, export_tab, source_tab, guide_tab = st.tabs([
-    "🔬 Tema Biblio+Meta", "🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📈 Insight", "🧭 Science Mapping", "🧪 Metodologi", "🧪 Meta-Analytic", "🧾 Meta Otomatis", "📤 Ekspor", "🌐 Sumber", "🚀 Panduan"
+tabs = st.tabs([
+    "🔬 Workflow Tema",
+    "📚 Bibliografi",
+    "✅ PRISMA & Screening",
+    "🧪 Meta-Analysis",
+    "⚖️ Risk of Bias",
+    "📉 Sensitivity & Bias",
+    "📤 Export",
+    "📖 Panduan"
 ])
 
-with theme_workflow_tab:
-    render_theme_biblio_meta_tab()
+with tabs[0]:
+    st.subheader("🔬 Workflow Tema → Bibliografi + Meta-Analisis")
+    theme = st.text_input("Tema/topik penelitian", placeholder="Contoh: artificial intelligence in education", key="theme_input")
+    source_mode = st.radio("Sumber", ["Otomatis sesuai tema", "Pilih manual"], horizontal=True)
+    suggested_sources = select_sources(theme) if theme else ["Crossref", "OpenAlex", "Semantic Scholar", "DOAJ", "DataCite"]
 
-with search_tab:
-    st.subheader("🔎 Cari Metadata Bibliografi dari Banyak Sumber")
-    query = st.text_input("Topik/keyword riset", placeholder="Contoh: artificial intelligence education bibliometric")
+    if source_mode == "Pilih manual":
+        selected_sources = st.multiselect("Pilih sumber", list(SOURCE_FUNCTIONS.keys()), default=suggested_sources)
+    else:
+        selected_sources = suggested_sources
+        st.write("Sumber otomatis:", ", ".join(selected_sources))
 
-    default_sources = ["Crossref", "OpenAlex", "PubMed", "Semantic Scholar", "DOAJ", "arXiv", "Europe PMC"]
-    sources = st.multiselect(
-        "Pilih sumber kredibel",
-        list(SOURCE_FUNCTIONS.keys()),
-        default=default_sources,
-        help="Semakin banyak sumber dipilih, hasil makin banyak tetapi proses lebih lama."
-    )
+    min_score = st.slider("Batas relevansi tema", 0.0, 8.0, 1.0, 0.5)
 
-    with st.expander("Keterangan sumber"):
-        for src, desc in SOURCE_HELP.items():
-            st.write(f"**{src}:** {desc}")
+    with st.expander("Kriteria screening awal"):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            min_year = st.number_input("Tahun minimal", min_value=1900, max_value=2100, value=2020)
+            max_year = st.number_input("Tahun maksimal", min_value=1900, max_value=2100, value=2026)
+        with c2:
+            only_doi = st.checkbox("Prioritaskan hanya DOI", value=False)
+            must_have_abstract = st.checkbox("Wajib/utamakan abstrak", value=False)
+            only_indexed = st.checkbox("Utamakan kandidat Scopus/WoS/High impact", value=False)
+        with c3:
+            include_terms = st.text_input("Kata kunci inklusi, pisahkan koma")
+            exclude_terms = st.text_input("Kata kunci eksklusi, pisahkan koma")
 
-    if st.button("Cari & gabungkan semua sumber", type="primary", use_container_width=True):
-        if not query.strip():
-            st.warning("Keyword masih kosong.")
-        elif not sources:
-            st.warning("Pilih minimal satu sumber.")
+    if st.button("🚀 Jalankan Workflow", type="primary", use_container_width=True):
+        if not theme.strip():
+            st.warning("Tema belum diisi.")
         else:
-            found = []
-            errors = []
-
+            found, errors = [], []
             progress = st.progress(0)
-            status_box = st.empty()
+            status = st.empty()
 
-            for i, source in enumerate(sources, start=1):
-                status_box.info(f"Mengambil data dari {source}...")
+            for i, source in enumerate(selected_sources, 1):
+                status.info(f"Mencari dari {source}...")
                 try:
-                    results = SOURCE_FUNCTIONS[source](query, rows, email)
-                    found += results
-                    st.write(f"✅ {source}: {len(results)} record")
+                    res = SOURCE_FUNCTIONS[source](theme, rows_per_source, email)
+                    found += res
+                    st.write(f"✅ {source}: {len(res)} record")
                 except Exception as exc:
                     errors.append(f"{source}: {exc}")
-                    st.write(f"⚠️ {source}: gagal/terbatas")
-                progress.progress(i / len(sources))
+                    st.write(f"⚠️ {source}: gagal/dilewati")
+                progress.progress(i / len(selected_sources))
 
-            add_records(found)
-            status_box.success(f"Selesai. Data baru terbaca: {len(found)}. Total record unik: {len(st.session_state.records)}")
+            unique_records = standardize(found)
+            relevant = filter_relevant(unique_records, theme, min_score)
+            st.session_state.found_total = len(found)
+            st.session_state.theme_records = relevant
+            st.session_state.records = standardize(st.session_state.records + relevant)
+            st.session_state.last_theme = theme
 
+            criteria = {
+                "min_year": min_year,
+                "max_year": max_year,
+                "only_doi": only_doi,
+                "must_have_abstract": must_have_abstract,
+                "only_indexed": only_indexed,
+                "include_terms": include_terms,
+                "exclude_terms": exclude_terms,
+            }
+            st.session_state.screened = auto_screen(relevant, criteria)
+
+            auto_meta = []
+            for r in relevant:
+                item = extract_effect_from_metadata(r)
+                if item:
+                    auto_meta.append(item)
+            st.session_state.meta_studies = auto_meta
+            st.session_state.rob_rows = build_rob_from_meta(auto_meta)
+
+            status.success(f"Selesai: {len(unique_records)} unik, {len(relevant)} relevan, {len(auto_meta)} effect size terbaca otomatis.")
             if errors:
-                with st.expander("Detail sumber yang gagal"):
+                with st.expander("Sumber yang gagal"):
                     for e in errors:
                         st.write(f"- {e}")
-
-with upload_tab:
-    st.subheader("⬆️ Upload File Bibliografi")
-    st.write("Format yang didukung: CSV, BibTeX `.bib`, RIS `.ris`, dan `.txt` berisi BibTeX/RIS.")
-    st.info("Untuk Scopus, Web of Science, Dimensions, Lens, Zotero, atau Mendeley, ekspor sebagai CSV/BibTeX/RIS.")
-
-    uploaded = st.file_uploader("Pilih file", type=["csv", "bib", "ris", "txt"])
-
-    if uploaded and st.button("Proses upload", type="primary", use_container_width=True):
-        data = uploaded.getvalue()
-        name = uploaded.name.lower()
-
-        try:
-            if name.endswith(".csv"):
-                parsed = parse_csv_bytes(data)
-            elif name.endswith(".ris"):
-                parsed = parse_ris(data.decode("utf-8", errors="replace"))
-            else:
-                parsed = parse_bibtex(data.decode("utf-8", errors="replace"))
-
-            add_records(parsed)
-            st.success(f"Berhasil membaca {len(parsed)} record. Total unik: {len(st.session_state.records)}")
-        except Exception as exc:
-            st.error(f"Gagal memproses file: {exc}")
-
-with manual_tab:
-    st.subheader("✍️ Tambah Referensi Manual")
-
-    with st.form("manual_reference_form"):
-        c1, c2 = st.columns(2)
-
-        with c1:
-            title = st.text_area("Judul")
-            authors = st.text_input("Penulis", placeholder="Nama 1; Nama 2")
-            year = st.text_input("Tahun")
-            journal = st.text_input("Jurnal/Prosiding")
-
-        with c2:
-            publisher = st.text_input("Publisher")
-            doi = st.text_input("DOI")
-            url = st.text_input("URL")
-            database = st.selectbox(
-                "Database",
-                ["Manual", "Scopus", "Web of Science", "SINTA", "Google Scholar", "Crossref", "OpenAlex", "PubMed", "Semantic Scholar", "DOAJ", "arXiv", "Europe PMC", "Lainnya"]
-            )
-            impact = st.text_input("Impact Factor/JIF/CiteScore")
-
-        abstract = st.text_area("Abstrak/catatan")
-        keywords = st.text_input("Keywords", placeholder="keyword 1; keyword 2")
-        submit_manual = st.form_submit_button("Tambahkan", type="primary")
-
-    if submit_manual:
-        new_item = {
-            "title": title,
-            "authors": authors,
-            "year": year,
-            "journal": journal,
-            "publisher": publisher,
-            "doi": doi,
-            "url": url,
-            "database": database,
-            "impact_factor": impact,
-            "abstract": abstract,
-            "keywords": keywords,
-        }
-        add_records(standardize([new_item]))
-        st.success("Data ditambahkan.")
-
-with data_tab:
-    st.subheader("📊 Data Bibliografi")
-    records = st.session_state.records
-
-    if not records:
-        st.info("Belum ada data. Gunakan tab Cari, Upload, atau Manual.")
-    else:
-        metrics = get_basic_metrics(records)
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("📚 Total", metrics["total"])
-        col2.metric("🔗 Dengan DOI", metrics["with_doi"])
-        col3.metric("⭐ Kandidat High Impact", metrics["high"])
-        col4.metric("✅ Kandidat Terindeks", metrics["scopus"] + metrics["wos"])
-
-        st.divider()
-
-        f1, f2, f3 = st.columns([2, 1, 1])
-        with f1:
-            keyword = st.text_input("🔍 Cari judul, penulis, jurnal, DOI, keyword")
-        with f2:
-            sort_option = st.selectbox("Urutkan", ["Terbaru dulu", "Terlama dulu", "Judul A-Z", "Database"])
-        with f3:
-            status_filter = st.selectbox("Status", ["Semua", "Terverifikasi/Kandidat", "Perlu Verifikasi"])
-
-        shown = filter_records(records, keyword, status_filter, sort_option)
-        st.write(f"Menampilkan **{len(shown)} dari {len(records)}** referensi")
-
-        display_records = []
-        for r in shown:
-            display_records.append({
-                "Judul": r.get("title", "")[:70] + ("..." if len(r.get("title", "")) > 70 else ""),
-                "Penulis": r.get("authors", "")[:45] + ("..." if len(r.get("authors", "")) > 45 else ""),
-                "Tahun": r.get("year", ""),
-                "Jurnal": r.get("journal", "")[:40] + ("..." if len(r.get("journal", "")) > 40 else ""),
-                "Database": r.get("database", ""),
-                "Status": r.get("indexing_status", "").split(";")[0] if r.get("indexing_status") else "—",
-            })
-
-        st.dataframe(display_records, use_container_width=True, height=480)
-
-        st.divider()
-
-        if st.checkbox("🔍 Lihat detail referensi"):
-            if shown:
-                idx = st.selectbox(
-                    "Pilih referensi",
-                    range(len(shown)),
-                    format_func=lambda i: shown[i].get("title", f"Referensi {i + 1}")[:80]
-                )
-
-                record = shown[idx]
-                left, right = st.columns(2)
-
-                with left:
-                    st.write(f"**Judul:** {record.get('title', '—')}")
-                    st.write(f"**Penulis:** {record.get('authors', '—')}")
-                    st.write(f"**Tahun:** {record.get('year', '—')}")
-                    st.write(f"**Jurnal:** {record.get('journal', '—')}")
-                    st.write(f"**Publisher:** {record.get('publisher', '—')}")
-
-                with right:
-                    st.write(f"**Database:** {record.get('database', '—')}")
-                    st.write(f"**DOI:** {record.get('doi', '—')}")
-                    st.write(f"**URL:** {record.get('url', '—')}")
-                    st.write(f"**Impact Factor/CiteScore:** {record.get('impact_factor', '—')}")
-                    st.write(f"**Status:** {record.get('indexing_status', '—')}")
-                    st.write(f"**Alasan:** {record.get('verification_reason', '—')}")
-
-                if record.get("abstract"):
-                    st.write("**Abstrak:**")
-                    st.write(record.get("abstract"))
-
-                if record.get("keywords"):
-                    st.write("**Keywords:**")
-                    st.write(record.get("keywords"))
-            else:
-                st.warning("Tidak ada referensi sesuai filter.")
-
-with insights_tab:
-    st.subheader("📈 Analisis & Insight")
-    records = st.session_state.records
-
-    if not records:
-        st.info("Belum ada data untuk dianalisis.")
-    else:
-        metrics = get_basic_metrics(records)
-
-        st.write("### Ringkasan Bibliometrik")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total dokumen", metrics["total"])
-        c2.metric("Penulis unik", metrics["authors_unique"])
-        c3.metric("Rata-rata penulis/doc", f"{metrics['avg_authors']:.2f}")
-        c4.metric("Kolaborasi", f"{metrics['collab_rate']:.1f}%")
-
-        st.divider()
-
-        meta1, meta2, meta3, meta4 = st.columns(4)
-        doi_pct = (metrics["with_doi"] / metrics["total"] * 100) if metrics["total"] else 0
-        abs_pct = (metrics["with_abstract"] / metrics["total"] * 100) if metrics["total"] else 0
-        kw_pct = (metrics["with_keywords"] / metrics["total"] * 100) if metrics["total"] else 0
-
-        meta1.metric("DOI", f"{metrics['with_doi']} ({doi_pct:.0f}%)")
-        meta2.metric("Abstrak", f"{metrics['with_abstract']} ({abs_pct:.0f}%)")
-        meta3.metric("Keywords", f"{metrics['with_keywords']} ({kw_pct:.0f}%)")
-        meta4.metric("Perlu verifikasi", metrics["need"])
-
-        st.divider()
-
-        left, right = st.columns(2)
-
-        with left:
-            st.write("### Distribusi Publikasi per Tahun")
-            years = year_distribution(records)
-            if years:
-                st.bar_chart(years)
-            else:
-                st.info("Tidak ada data tahun.")
-
-        with right:
-            st.write("### Distribusi Database")
-            dbs = count_by(records, "database", 20)
-            if dbs:
-                st.bar_chart(dbs)
-            else:
-                st.info("Tidak ada data database.")
-
-        st.divider()
-
-        left2, right2 = st.columns(2)
-
-        with left2:
-            st.write("### Penulis Terbanyak")
-            authors = author_distribution(records, 15)
-            if authors:
-                st.bar_chart(authors)
-            else:
-                st.info("Tidak ada data penulis.")
-
-        with right2:
-            st.write("### Jurnal Terbanyak")
-            journals = count_by(records, "journal", 15)
-            if journals:
-                st.bar_chart(journals)
-            else:
-                st.info("Tidak ada data jurnal.")
-
-        st.divider()
-
-        left3, right3 = st.columns(2)
-
-        with left3:
-            st.write("### Keyword Terbanyak")
-            keywords = keyword_distribution(records, 20)
-            if keywords:
-                st.bar_chart(keywords)
-            else:
-                st.info("Tidak ada data keyword.")
-
-        with right3:
-            st.write("### Status Indeksasi")
-            status_data = {
-                "Scopus candidate": metrics["scopus"],
-                "WoS candidate": metrics["wos"],
-                "High impact": metrics["high"],
-                "Needs verification": metrics["need"],
-            }
-            st.bar_chart(status_data)
-
-        st.divider()
-
-        st.write("### Jaringan Kolaborasi Penulis")
-        coauth = coauthorship_summary(records)
-        n1, n2, n3 = st.columns(3)
-        n1.metric("Total penulis", coauth["num_authors"])
-        n2.metric("Relasi kolaborasi", coauth["num_collaborations"])
-        n3.metric("Network density", f"{coauth['density']:.3f}")
-
-        ctop1, ctop2 = st.columns(2)
-
-        with ctop1:
-            st.write("**Penulis paling produktif:**")
-            if coauth["top_authors"]:
-                for author, count in coauth["top_authors"]:
-                    st.write(f"- {author}: {count} publikasi")
-            else:
-                st.info("Belum ada data penulis.")
-
-        with ctop2:
-            st.write("**Kolaborasi terkuat:**")
-            if coauth["top_edges"]:
-                for (a, b), count in coauth["top_edges"]:
-                    st.write(f"- {a} ↔ {b}: {count} kali")
-            else:
-                st.info("Belum ada pasangan kolaborasi.")
-
-        st.divider()
-
-        st.write("### Rekomendasi")
-        recommendations = []
-
-        if doi_pct < 70:
-            recommendations.append(f"⚠️ DOI coverage masih {doi_pct:.0f}%. Tambahkan DOI agar metadata lebih kuat.")
-        if abs_pct < 50:
-            recommendations.append(f"💡 Abstrak baru {abs_pct:.0f}%. Lengkapi abstrak untuk analisis isi yang lebih baik.")
-        if metrics["need"] > metrics["total"] * 0.5:
-            recommendations.append("⚠️ Lebih dari 50% referensi perlu verifikasi indeks. Cek manual di Scopus/WoS/JCR/SJR.")
-        if metrics["collab_rate"] < 30:
-            recommendations.append("💡 Tingkat kolaborasi relatif rendah. Pertimbangkan literatur multi-author untuk pemetaan jaringan.")
-        if not recommendations:
-            recommendations.append("✅ Dataset sudah cukup baik. Lanjutkan validasi indeks resmi dan ekspor data.")
-
-        for rec in recommendations:
-            st.info(rec)
-
-        st.divider()
-
-        report_text = build_report(records)
-        st.download_button(
-            "📥 Download Laporan TXT",
-            data=report_text.encode("utf-8"),
-            file_name="laporan_bibliometrik.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-
-
-with mapping_tab:
-    st.subheader("🧭 Science Mapping Lengkap")
-    records = st.session_state.records
-    if not records:
-        st.info("Belum ada data untuk science mapping.")
-    else:
-        st.write("Science mapping mengikuti toolbox bibliometrik: citation analysis, co-citation, bibliographic coupling, co-word, dan co-authorship.")
-        map_tabs = st.tabs(["Citation", "Co-citation", "Bibliographic Coupling", "Co-word", "Co-authorship", "Network Metrics"])
-        with map_tabs[0]:
-            st.write("### Citation Analysis")
-            st.write("Menampilkan publikasi paling berpengaruh berdasarkan global citations jika metadata tersedia.")
-            st.dataframe(citation_relationships(records), use_container_width=True)
-        with map_tabs[1]:
-            st.write("### Co-citation Analysis")
-            cc = co_citation_analysis(records)
-            if cc["top_references"]:
-                st.write("**Referensi paling sering muncul:**")
-                st.dataframe([{"Reference": k[:120], "Frequency": v} for k,v in cc["top_references"]], use_container_width=True)
-                st.write("**Pasangan referensi yang sering dikutip bersama:**")
-                st.dataframe([{"Reference 1": a[:80], "Reference 2": b[:80], "Strength": w} for (a,b),w in cc["co_cited_pairs"]], use_container_width=True)
-            else:
-                st.info("Co-citation membutuhkan kolom references/cited references dari Scopus/WoS/Crossref.")
-        with map_tabs[2]:
-            st.write("### Bibliographic Coupling")
-            bc = bibliographic_coupling(records)
-            if bc:
-                st.dataframe(bc, use_container_width=True)
-            else:
-                st.info("Bibliographic coupling membutuhkan data referensi. Upload CSV/RIS/BibTeX dengan cited references untuk hasil maksimal.")
-        with map_tabs[3]:
-            st.write("### Co-word Analysis")
-            cw = co_word_network(records)
-            left, right = st.columns(2)
-            with left:
-                st.write("**Keyword/term paling sering:**")
-                if cw["nodes"]:
-                    st.bar_chart(dict(cw["nodes"]))
-                else:
-                    st.info("Belum ada keyword/abstrak/judul yang cukup.")
-            with right:
-                st.write("**Pasangan kata/keyword:**")
-                st.dataframe([{"Term 1": a, "Term 2": b, "Co-occurrence": w} for (a,b),w in cw["edges"]], use_container_width=True)
-        with map_tabs[4]:
-            st.write("### Co-authorship Analysis")
-            coauth = coauthorship_summary(records)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Authors", coauth["num_authors"])
-            c2.metric("Collaboration links", coauth["num_collaborations"])
-            c3.metric("Density", f"{coauth['density']:.3f}")
-            st.write("**Kolaborasi terkuat:**")
-            st.dataframe([{"Author 1": a, "Author 2": b, "Strength": w} for (a,b),w in coauth["top_edges"]], use_container_width=True)
-        with map_tabs[5]:
-            st.write("### Network Metrics")
-            st.write("Metrik ringan tanpa NetworkX: degree centrality, weighted degree, dan aproksimasi prestige/eigen.")
-            st.dataframe(network_metrics_summary(records), use_container_width=True)
-
-with method_tab:
-    st.subheader("🧪 Metodologi Bibliometric Analysis")
-    records = st.session_state.records
-    st.write("Tab ini dibuat mengikuti alur jurnal Donthu et al. (2021): menentukan aim & scope, memilih teknik, mengumpulkan/membersihkan data, menjalankan analisis, lalu melaporkan temuan.")
-    setup_tabs = st.tabs(["Aim & Scope", "Technique Toolbox", "Performance Metrics", "Procedure Checklist", "Limitations"])
-    with setup_tabs[0]:
-        st.write("### 1. Define aims and scope")
-        aim = st.text_area("Tujuan studi bibliometrik", value="Mengidentifikasi perkembangan, aktor utama, jurnal utama, struktur intelektual, dan tema riset terkini pada topik yang dikaji.")
-        scope = st.text_area("Scope/kriteria inklusi", value="Artikel jurnal/prosiding relevan, periode tahun tertentu, bersumber dari database kredibel seperti Scopus, WoS, Crossref, OpenAlex, PubMed, Semantic Scholar, DOAJ, arXiv, Europe PMC.")
-        keyword_plan = st.text_area("Rencana search string", value='("bibliometric analysis" OR bibliometrics) AND (topic utama)')
-        st.download_button("📥 Download rancangan metodologi", data=f"AIM:\n{aim}\n\nSCOPE:\n{scope}\n\nSEARCH STRING:\n{keyword_plan}".encode("utf-8"), file_name="rancangan_metodologi_bibliometrik.txt", mime="text/plain")
-    with setup_tabs[1]:
-        st.write("### 2. Bibliometric Analysis Technique Toolbox")
-        st.markdown("""
-| Kategori | Teknik | Output di aplikasi |
-|---|---|---|
-| Performance analysis | TP, NCA, SA, CA, NAY, PAY, TC, AC, CI, CC, NCP, PCP, CCP, h-index, g-index, i10 | Tab Insight & Performance Metrics |
-| Science mapping | Citation analysis | Publikasi paling berpengaruh |
-| Science mapping | Co-citation analysis | Fondasi intelektual dari referensi yang sering dikutip bersama |
-| Science mapping | Bibliographic coupling | Tema saat ini berdasarkan referensi yang sama |
-| Science mapping | Co-word analysis | Tema/topik dari keyword, judul, dan abstrak |
-| Science mapping | Co-authorship analysis | Jaringan kolaborasi penulis |
-| Enrichment | Network metrics, clustering, visualization | Degree, weighted degree, density, ekspor VOSviewer/CiteSpace |
-""")
-    with setup_tabs[2]:
-        st.write("### Performance Analysis Metrics")
-        if records:
-            unit = st.selectbox("Unit analisis", ["authors", "journals", "countries", "database"])
-            st.dataframe(performance_table(records, unit), use_container_width=True)
-            cm = citation_metrics(records)
-            c1,c2,c3,c4,c5 = st.columns(5)
-            c1.metric("TC", cm["TC"])
-            c2.metric("AC", f"{cm['AC']:.2f}")
-            c3.metric("h-index", cm["h_index"])
-            c4.metric("g-index", cm["g_index"])
-            c5.metric("i10", cm["i10"])
-        else:
-            st.info("Tambahkan data terlebih dahulu.")
-    with setup_tabs[3]:
-        st.write("### 4-Step Procedure Checklist")
-        st.dataframe(methodology_checklist(records), use_container_width=True)
-    with setup_tabs[4]:
-        st.write("### Limitasi dan validasi")
-        st.markdown("""
-- Data dari database ilmiah dapat mengandung duplikasi, metadata kosong, atau format referensi yang berbeda.
-- Status Scopus/WoS/high impact di aplikasi adalah kandidat berbasis metadata, bukan validasi resmi.
-- Co-citation dan bibliographic coupling membutuhkan kolom references/cited references agar akurat.
-- Interpretasi cluster tetap perlu dibaca secara substantif, tidak cukup hanya melihat angka.
-- Untuk visualisasi lanjutan, ekspor ke VOSviewer, Gephi, Bibliometrix, atau CiteSpace.
-""")
-
-with meta_tab:
-    render_meta_analysis_tab()
-
-with meta_auto_tab:
-    render_meta_auto_tab()
-
-with export_tab:
-    st.subheader("📤 Ekspor Data")
-    records = st.session_state.records
-
-    if not records:
-        st.info("Belum ada data untuk diekspor.")
-    else:
-        st.write(f"**Total referensi:** {len(records)}")
-
-        export_filter = st.radio(
-            "Ekspor:",
-            ["Semua", "Hanya kandidat terverifikasi", "Hanya perlu verifikasi"],
-            horizontal=True,
-        )
-
-        export_records = records
-        if export_filter == "Hanya kandidat terverifikasi":
-            export_records = [
-                r for r in records
-                if "candidate" in r.get("indexing_status", "").lower()
-                or "impact" in r.get("indexing_status", "").lower()
-            ]
-        elif export_filter == "Hanya perlu verifikasi":
-            export_records = [r for r in records if r.get("indexing_status", "") == "Needs verification"]
-
-        st.write(f"Diekspor: **{len(export_records)}** referensi")
-        st.divider()
-
-        if export_records:
-            exp1, exp2 = st.columns(2)
-
-            with exp1:
-                st.download_button(
-                    "📥 CSV",
-                    data=to_csv(export_records),
-                    file_name="bibliografi_riset.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
-                st.download_button(
-                    "📥 BibTeX",
-                    data=to_bibtex(export_records).encode("utf-8"),
-                    file_name="bibliografi_riset.bib",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-
-            with exp2:
-                st.download_button(
-                    "📥 RIS",
-                    data=to_ris(export_records).encode("utf-8"),
-                    file_name="bibliografi_riset.ris",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-                st.download_button(
-                    "📥 JSON",
-                    data=json.dumps(export_records, ensure_ascii=False, indent=2).encode("utf-8"),
-                    file_name="bibliografi_riset.json",
-                    mime="application/json",
-                    use_container_width=True,
-                )
-
-            st.download_button(
-                "📥 VOSviewer Network (.net)",
-                data=to_vosviewer_net(export_records).encode("utf-8"),
-                file_name="coauthorship_vosviewer.net",
-                mime="text/plain",
-                use_container_width=True,
-            )
-            st.download_button(
-                "📥 CiteSpace/Plain Text (.txt)",
-                data=to_citespace(export_records).encode("utf-8"),
-                file_name="citespace_export.txt",
-                mime="text/plain",
-                use_container_width=True,
-            )
-        else:
-            st.warning("Tidak ada referensi sesuai filter untuk diekspor.")
-
-with source_tab:
-    st.subheader("🌐 Daftar Sumber Kredibel")
-    st.write("Aplikasi ini memakai sumber terbuka/kredibel yang relatif aman untuk Streamlit Cloud tanpa library berat.")
-    for src, desc in SOURCE_HELP.items():
-        st.markdown(f"- **{src}**: {desc}")
+            if not auto_meta:
+                st.info("Effect size biasanya tidak tersedia di metadata. Download format meta-analysis di tab Meta-Analysis, isi dari full-text, lalu upload kembali.")
 
     st.divider()
-    st.write("### Sumber berbayar/berlangganan")
+    if st.session_state.theme_records:
+        m = get_metrics(st.session_state.theme_records)
+        a, b, c, d = st.columns(4)
+        a.metric("Referensi relevan", len(st.session_state.theme_records))
+        b.metric("Dengan DOI", m["with_doi"])
+        c.metric("Dengan abstrak", m["with_abstract"])
+        d.metric("Effect size otomatis", len(st.session_state.meta_studies))
+
+with tabs[1]:
+    st.subheader("📚 Bibliografi")
+    upload_col, manual_col = st.columns(2)
+
+    with upload_col:
+        uploaded = st.file_uploader("Upload CSV/BibTeX/RIS", type=["csv", "bib", "ris", "txt"])
+        if uploaded and st.button("Proses Upload Bibliografi"):
+            data = uploaded.getvalue()
+            name = uploaded.name.lower()
+            try:
+                if name.endswith(".csv"):
+                    parsed = parse_csv_bytes(data)
+                elif name.endswith(".ris"):
+                    parsed = parse_ris(data.decode("utf-8", errors="replace"))
+                else:
+                    parsed = parse_bibtex(data.decode("utf-8", errors="replace"))
+                add_records(parsed)
+                st.success(f"Berhasil membaca {len(parsed)} record.")
+            except Exception as exc:
+                st.error(f"Gagal memproses file: {exc}")
+
+    with manual_col:
+        with st.form("manual_reference"):
+            st.write("Tambah manual")
+            title = st.text_input("Judul")
+            authors = st.text_input("Penulis", placeholder="Nama 1; Nama 2")
+            year = st.text_input("Tahun")
+            journal = st.text_input("Jurnal")
+            doi = st.text_input("DOI")
+            database = st.selectbox("Database", ["Manual", "Scopus", "Web of Science", "Crossref", "OpenAlex", "PubMed", "DOAJ", "Lainnya"])
+            submitted = st.form_submit_button("Tambah")
+        if submitted:
+            add_records(standardize([{"title": title, "authors": authors, "year": year, "journal": journal, "doi": doi, "database": database}]))
+            st.success("Referensi ditambahkan.")
+
+    records = st.session_state.theme_records or st.session_state.records
+    if not records:
+        st.info("Belum ada data bibliografi.")
+    else:
+        m = get_metrics(records)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total", len(records))
+        c2.metric("DOI", m["with_doi"])
+        c3.metric("Abstrak", m["with_abstract"])
+        c4.metric("Kandidat indeks", m["scopus"] + m["wos"] + m["high"])
+
+        kw = st.text_input("Cari di bibliografi")
+        shown = records
+        if kw.strip():
+            shown = [r for r in records if kw.lower() in json.dumps(r, ensure_ascii=False).lower()]
+
+        display = []
+        for r in shown:
+            display.append({
+                "Skor": r.get("theme_relevance_score", ""),
+                "Judul": r.get("title", "")[:80] + ("..." if len(r.get("title", "")) > 80 else ""),
+                "Penulis": r.get("authors", "")[:40],
+                "Tahun": r.get("year", ""),
+                "Jurnal": r.get("journal", "")[:40],
+                "Database": r.get("database", ""),
+                "Status": r.get("indexing_status", "").split(";")[0],
+            })
+        st.dataframe(display, use_container_width=True, height=420)
+
+        st.write("### Insight Bibliografi")
+        st.text_area("Laporan", value=build_biblio_report(records, st.session_state.last_theme), height=360)
+
+with tabs[2]:
+    st.subheader("✅ PRISMA Flow & Screening")
+    records = st.session_state.theme_records or st.session_state.records
+
+    if not records:
+        st.info("Belum ada data untuk screening.")
+    else:
+        with st.form("screening_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                min_year2 = st.number_input("Tahun minimal", min_value=1900, max_value=2100, value=2020, key="screen_min")
+                max_year2 = st.number_input("Tahun maksimal", min_value=1900, max_value=2100, value=2026, key="screen_max")
+            with c2:
+                only_doi2 = st.checkbox("Hanya DOI", value=False, key="screen_doi")
+                must_abs2 = st.checkbox("Harus punya abstrak", value=False, key="screen_abs")
+                only_indexed2 = st.checkbox("Utamakan kandidat terindeks", value=False, key="screen_index")
+            with c3:
+                include_terms2 = st.text_input("Kata inklusi", key="screen_inc")
+                exclude_terms2 = st.text_input("Kata eksklusi", key="screen_exc")
+            submit_screen = st.form_submit_button("Jalankan Screening")
+
+        if submit_screen or not st.session_state.screened:
+            criteria = {
+                "min_year": min_year2, "max_year": max_year2, "only_doi": only_doi2,
+                "must_have_abstract": must_abs2, "only_indexed": only_indexed2,
+                "include_terms": include_terms2, "exclude_terms": exclude_terms2,
+            }
+            st.session_state.screened = auto_screen(records, criteria)
+
+        screened = st.session_state.screened
+        prisma = prisma_counts(st.session_state.found_total or len(records), records, screened, st.session_state.meta_studies)
+
+        st.write("### PRISMA Counts")
+        pcols = st.columns(4)
+        for i, (k, v) in enumerate(prisma.items()):
+            pcols[i % 4].metric(k.replace("_", " ").title(), v)
+
+        st.write("### Tabel Screening")
+        st.dataframe(screened, use_container_width=True, height=420)
+
+with tabs[3]:
+    st.subheader("🧪 Meta-Analysis")
+    records = st.session_state.theme_records or st.session_state.records
+
+    st.write("### Format Ekstraksi")
+    meta_format = bibliographic_to_meta_format(records, st.session_state.last_theme)
+    st.download_button(
+        "📥 Download Format Meta-Analysis dari Bibliografi",
+        data=safe_csv(meta_format, META_EXTRACTION_COLUMNS),
+        file_name="format_meta_analysis.csv",
+        mime="text/csv",
+        use_container_width=True,
+        disabled=not bool(meta_format),
+    )
+
+    sample_rows = [
+        {"include": "yes", "study_id": "Smith 2020", "authors": "Smith", "year": "2020", "title": "Sample A", "journal": "Journal A", "doi": "", "group": "Education", "effect_type": "smd", "effect_size": "", "standard_error": "", "n_t": "45", "mean_t": "82.4", "sd_t": "10.5", "n_c": "43", "mean_c": "77.1", "sd_c": "11.2", "event_t": "", "total_t": "", "event_c": "", "total_c": "", "non_event_t": "", "non_event_c": "", "r": "", "n": "", "outcome": "Learning", "population": "Students", "intervention": "AI", "comparison": "Traditional", "notes": "sample"},
+        {"include": "yes", "study_id": "Lee 2021", "authors": "Lee", "year": "2021", "title": "Sample B", "journal": "Journal B", "doi": "", "group": "Education", "effect_type": "", "effect_size": "0.52", "standard_error": "0.15", "n_t": "", "mean_t": "", "sd_t": "", "n_c": "", "mean_c": "", "sd_c": "", "event_t": "", "total_t": "", "event_c": "", "total_c": "", "non_event_t": "", "non_event_c": "", "r": "", "n": "", "outcome": "Achievement", "population": "Students", "intervention": "AI", "comparison": "Control", "notes": "sample"},
+    ]
+    st.download_button("📄 Download Contoh Terisi", data=safe_csv(sample_rows, META_EXTRACTION_COLUMNS), file_name="contoh_meta_analysis_terisi.csv", mime="text/csv")
+
+    uploaded_meta = st.file_uploader("Upload CSV meta-analysis yang sudah diisi", type=["csv"])
+    if uploaded_meta and st.button("Proses Meta-Analysis", type="primary"):
+        studies, skipped = parse_meta_csv(uploaded_meta.getvalue())
+        st.session_state.meta_studies = studies
+        st.session_state.rob_rows = build_rob_from_meta(studies)
+        st.success(f"Studi valid: {len(studies)}. Dilewati: {skipped}.")
+
+    if st.button("Gunakan Sample Meta-Analysis"):
+        studies, skipped = parse_meta_csv(safe_csv(sample_rows, META_EXTRACTION_COLUMNS))
+        st.session_state.meta_studies = studies
+        st.session_state.rob_rows = build_rob_from_meta(studies)
+        st.success("Sample dimuat.")
+
+    studies = st.session_state.meta_studies
+    if not studies:
+        st.info("Belum ada effect size/SE valid. Isi dan upload format meta-analysis.")
+    else:
+        result = run_meta(studies)
+        subgroup = subgroup_meta(studies)
+        model = st.radio("Model utama", ["Random-effects", "Fixed-effect"], horizontal=True)
+        main = result["random"] if model.startswith("Random") else result["fixed"]
+        h = result["heterogeneity"]
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Studi", result["k"])
+        c2.metric("Pooled effect", f"{main['pooled']:.4f}")
+        c3.metric("95% CI", f"{main['ci'][0]:.3f} – {main['ci'][1]:.3f}")
+        c4.metric("p-value", f"{main['p']:.4f}")
+
+        h1, h2, h3, h4 = st.columns(4)
+        h1.metric("Q", f"{h['Q']:.3f}")
+        h2.metric("df", h["df"])
+        h3.metric("tau²", f"{h['tau2']:.4f}")
+        h4.metric("I²", f"{h['I2']:.1f}%")
+
+        display = []
+        for s in result["studies"]:
+            display.append({
+                "Study": s.get("study_id", ""),
+                "Year": s.get("year", ""),
+                "Group": s.get("group", ""),
+                "Type": s.get("effect_type", ""),
+                "Effect": round(s.get("effect_size", 0), 4),
+                "SE": round(s.get("standard_error", 0), 4),
+                "95% CI": f"{s.get('lower_ci', 0):.3f} – {s.get('upper_ci', 0):.3f}",
+                "Weight RE %": round(s.get("weight_random", 0), 2),
+            })
+        st.dataframe(display, use_container_width=True, height=320)
+
+        st.write("### Forest Plot Sederhana")
+        for s in result["studies"]:
+            st.code(f"{s.get('study_id','Study')[:28]:28} {s['effect_size']: .3f} [{s['lower_ci']:.3f}, {s['upper_ci']:.3f}]")
+        st.code(f"{'POOLED':28} {main['pooled']: .3f} [{main['ci'][0]:.3f}, {main['ci'][1]:.3f}]")
+
+        st.write("### Insight")
+        st.text_area("Laporan meta-analysis", value=build_meta_report(result, subgroup, model), height=360)
+
+with tabs[4]:
+    st.subheader("⚖️ Risk of Bias / Quality Assessment")
+    if not st.session_state.meta_studies:
+        st.info("Belum ada studi meta-analysis. Upload data meta-analysis dulu.")
+    else:
+        if not st.session_state.rob_rows:
+            st.session_state.rob_rows = build_rob_from_meta(st.session_state.meta_studies)
+
+        st.write("Isi penilaian manual berdasarkan full-text artikel.")
+        edited_rows = []
+        for i, row in enumerate(st.session_state.rob_rows):
+            with st.expander(row.get("study_id", f"Study {i+1}")):
+                edited = dict(row)
+                cols = st.columns(3)
+                options = ["Low risk", "Moderate/Unclear risk", "High risk"]
+                edited["randomization"] = cols[0].selectbox("Randomization", options, index=1, key=f"rob_rand_{i}")
+                edited["blinding"] = cols[1].selectbox("Blinding", options, index=1, key=f"rob_blind_{i}")
+                edited["incomplete_data"] = cols[2].selectbox("Incomplete data", options, index=1, key=f"rob_inc_{i}")
+                cols2 = st.columns(3)
+                edited["selective_reporting"] = cols2[0].selectbox("Selective reporting", options, index=1, key=f"rob_sel_{i}")
+                edited["confounding_control"] = cols2[1].selectbox("Confounding control", options, index=1, key=f"rob_conf_{i}")
+                edited["sample_size_adequate"] = cols2[2].selectbox("Sample size adequate", options, index=1, key=f"rob_samp_{i}")
+                edited["overall_risk"] = score_rob(edited)
+                edited["notes"] = st.text_input("Catatan", value=edited.get("notes", ""), key=f"rob_note_{i}")
+                st.write("Overall:", edited["overall_risk"])
+                edited_rows.append(edited)
+
+        st.session_state.rob_rows = edited_rows
+        risk_counts = Counter(r.get("overall_risk", "Unclear") for r in edited_rows)
+        st.write("### Ringkasan Risk of Bias")
+        st.bar_chart(dict(risk_counts))
+        st.dataframe(edited_rows, use_container_width=True)
+
+with tabs[5]:
+    st.subheader("📉 Sensitivity Analysis & Publication Bias")
+    studies = st.session_state.meta_studies
+    if len(studies) < 2:
+        st.info("Minimal 2 studi diperlukan untuk sensitivity analysis.")
+    else:
+        loo = leave_one_out(studies)
+        st.write("### Leave-One-Out Analysis")
+        st.dataframe([
+            {
+                "Removed": r["removed_study"],
+                "k": r["k_remaining"],
+                "Pooled RE": round(r["pooled_random"], 4),
+                "95% CI": f"{r['lower_ci']:.3f} – {r['upper_ci']:.3f}",
+                "I²": f"{r['I2']:.1f}%"
+            } for r in loo
+        ], use_container_width=True)
+
+        st.write("### Publication Bias")
+        egger = egger_test_approx(studies)
+        if not egger.get("available"):
+            st.info(f"Egger test belum tersedia: {egger.get('reason')}")
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Egger intercept", f"{egger['intercept']:.4f}")
+            c2.metric("t/z approx", f"{egger['t']:.4f}")
+            c3.metric("p approx", f"{egger['p']:.4f}")
+            if egger["p"] < 0.05:
+                st.warning("Ada indikasi asymmetry/publication bias. Validasi dengan funnel plot/software statistik.")
+            else:
+                st.success("Tidak ada indikasi kuat publication bias berdasarkan pendekatan sederhana ini.")
+
+        st.write("### Funnel Plot Sederhana")
+        for s in studies:
+            yi, se = safe_float(s.get("effect_size")), safe_float(s.get("standard_error"))
+            st.code(f"{s.get('study_id','Study')[:25]:25} effect={yi:.3f} se={se:.3f}")
+
+with tabs[6]:
+    st.subheader("📤 Export")
+    records = st.session_state.theme_records or st.session_state.records
+    screened = st.session_state.screened
+    meta_studies = st.session_state.meta_studies
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    prisma = prisma_counts(st.session_state.found_total or len(records), records, screened, meta_studies)
+    final_summary = build_final_summary(st.session_state.last_theme, records, screened, meta_result, prisma)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("📥 Bibliografi CSV", data=to_csv(records), file_name="bibliografi.csv", mime="text/csv", use_container_width=True, disabled=not bool(records))
+        st.download_button("📥 Bibliografi BibTeX", data=to_bibtex(records).encode("utf-8"), file_name="bibliografi.bib", mime="text/plain", use_container_width=True, disabled=not bool(records))
+        st.download_button("📥 Screening CSV", data=safe_csv(screened, SCREENING_COLUMNS), file_name="screening_prisma.csv", mime="text/csv", use_container_width=True, disabled=not bool(screened))
+        st.download_button("📥 Risk of Bias CSV", data=safe_csv(st.session_state.rob_rows, ROB_COLUMNS), file_name="risk_of_bias.csv", mime="text/csv", use_container_width=True, disabled=not bool(st.session_state.rob_rows))
+    with col2:
+        meta_format = bibliographic_to_meta_format(records, st.session_state.last_theme)
+        st.download_button("📥 Format Meta-Analysis CSV", data=safe_csv(meta_format, META_EXTRACTION_COLUMNS), file_name="format_meta_analysis.csv", mime="text/csv", use_container_width=True, disabled=not bool(meta_format))
+        st.download_button("📥 Hasil Meta CSV", data=safe_csv(meta_result.get("studies", []), list(meta_result.get("studies", [{}])[0].keys()) if meta_result.get("studies") else META_EXTRACTION_COLUMNS), file_name="hasil_meta_analysis.csv", mime="text/csv", use_container_width=True, disabled=not bool(meta_result.get("studies")))
+        st.download_button("📥 Laporan Bibliografi TXT", data=build_biblio_report(records, st.session_state.last_theme).encode("utf-8"), file_name="laporan_bibliografi.txt", mime="text/plain", use_container_width=True, disabled=not bool(records))
+        st.download_button("📥 Laporan Akhir TXT", data=final_summary.encode("utf-8"), file_name="laporan_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
+
+with tabs[7]:
+    st.subheader("📖 Panduan")
     st.markdown("""
-- **Scopus**: gunakan ekspor CSV/RIS/BibTeX dari akun institusi, lalu upload ke tab Upload.
-- **Web of Science**: gunakan ekspor CSV/RIS/BibTeX dari akun institusi, lalu upload ke tab Upload.
-- **Journal Citation Reports/JCR**: gunakan untuk validasi Impact Factor resmi.
-- **Scimago/SJR**: gunakan untuk validasi quartile dan SJR.
-- **Dimensions/Lens**: bisa digunakan lewat ekspor CSV/RIS/BibTeX.
-""")
+### Alur yang disarankan
+1. Buka tab **Workflow Tema**.
+2. Masukkan tema penelitian.
+3. Jalankan pencarian otomatis.
+4. Cek hasil di **Bibliografi**.
+5. Cek screening dan PRISMA di **PRISMA & Screening**.
+6. Download format meta-analysis dari tab **Meta-Analysis**.
+7. Isi effect size/SE atau data mentah dari full-text artikel.
+8. Upload kembali file tersebut ke tab **Meta-Analysis**.
+9. Isi **Risk of Bias**.
+10. Cek **Sensitivity & Bias**.
+11. Export laporan dari tab **Export**.
 
-    st.warning("Catatan: status Scopus/WoS/high impact di aplikasi ini adalah kandidat berbasis metadata, bukan verifikasi resmi.")
+### Sumber kredibel
+- Crossref
+- OpenAlex
+- PubMed
+- Semantic Scholar
+- DOAJ
+- arXiv
+- Europe PMC
+- DataCite
 
-with guide_tab:
-    st.subheader("🚀 Panduan Penggunaan & Deploy")
+### Catatan penting
+Status Scopus/WoS/high impact adalah kandidat berbasis metadata, bukan validasi resmi. Validasi akhir tetap perlu dilakukan melalui Scopus, Web of Science, JCR, SJR, atau laman resmi jurnal.
 
-    usage_tab, deploy_tab, tips_tab = st.tabs(["📖 Cara Pakai", "☁️ Deploy Cloud", "💡 Tips"])
-
-    with usage_tab:
-        st.markdown("""
-### Cara Pakai
-1. **Cari** referensi dari banyak sumber kredibel.
-2. **Upload** file bibliografi dari Scopus/WoS/Zotero/Mendeley dalam format CSV, BibTeX, atau RIS.
-3. **Manual** untuk menambahkan referensi satu per satu.
-4. **Data** untuk melihat, memfilter, dan mengecek detail referensi.
-5. **Insight** untuk melihat ringkasan bibliometrik, distribusi tahun, jurnal, penulis, keyword, dan kolaborasi.
-6. **Ekspor** ke CSV, BibTeX, RIS, JSON, atau VOSviewer `.net`.
-""")
-
-    with deploy_tab:
-        st.markdown("""
-### Deploy ke Streamlit Cloud
-1. Upload isi folder ke repository GitHub.
-2. Pastikan file utama bernama `app.py`.
-3. Pastikan `requirements.txt` ada di root repository.
-4. Di Streamlit Cloud, pilih repo dan branch `main`.
-5. Main file path: `app.py`.
-6. Disarankan pakai Python 3.11 atau 3.12.
-
-### Struktur Folder
-```text
-app.py
-requirements.txt
-.streamlit/config.toml
-data/sample_references.csv
-README.md
-```
-""")
-
-    with tips_tab:
-        st.markdown("""
-### Tips
-- Untuk Scopus/WoS, ekspor sebagai **CSV/RIS/BibTeX**.
-- Semakin banyak sumber dipilih, hasil makin banyak tetapi proses pencarian lebih lama.
-- Jika satu sumber gagal, aplikasi tetap melanjutkan sumber lain.
-- Masukkan DOI sebanyak mungkin agar deduplikasi lebih akurat.
-- Status Scopus/WoS/high impact di aplikasi ini adalah **kandidat berbasis metadata**, bukan validasi resmi.
-- Validasi akhir tetap lakukan melalui Scopus, Web of Science, JCR, SJR, atau laman resmi jurnal.
-- Ekspor data secara berkala agar tidak hilang ketika session Streamlit selesai.
+Untuk meta-analysis, hasil otomatis harus divalidasi kembali dengan full-text dan software statistik khusus jika digunakan untuk publikasi akademik.
 """)
