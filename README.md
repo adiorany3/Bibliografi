@@ -161,3 +161,11 @@ Ditambahkan tab **Panduan Meta**:
 - Template data meta-analysis Excel
 - Catatan Q-level untuk pelaporan meta-analysis
 - Export panduan meta-analysis
+
+## Fix Panduan Meta Visible
+
+Perbaikan:
+- Panduan Meta sekarang ditampilkan langsung di dalam tab **📖 Panduan**.
+- Tidak bergantung pada indeks tab baru, sehingga tidak hilang meskipun urutan tab berubah.
+- Panduan tetap tampil walaupun dataset belum ada.
+- Checklist meta-analysis dan export panduan ditambahkan.

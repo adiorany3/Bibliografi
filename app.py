@@ -3937,60 +3937,100 @@ Summarize the contribution and evidence readiness of the field.
 
 
 
+
 # =========================================================
-# Practical Meta-Analysis Guide
+# Practical Meta-Analysis Guide - Visible in Panduan
 # =========================================================
 def build_meta_analysis_steps_guide(theme: str) -> str:
     theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
-    framework = infer_review_framework(theme) if "infer_review_framework" in globals() else {"framework": "PICO", "fields": {}}
-    fields = framework.get("fields", {})
-    field_lines = "\n".join([f"- {k}: {v}" for k, v in fields.items()]) if fields else "- P: population\n- I/E: intervention or exposure\n- C: comparison\n- O: outcome"
+    if "infer_review_framework" in globals():
+        framework = infer_review_framework(theme)
+    else:
+        framework = {
+            "framework": "PICO",
+            "fields": {
+                "Population": "Populasi/subjek penelitian.",
+                "Intervention": "Intervensi, paparan, teknologi, atau perlakuan.",
+                "Comparison": "Pembanding, kontrol, baseline, atau metode konvensional.",
+                "Outcome": "Hasil akhir yang diukur."
+            }
+        }
+
+    fields_text = "\n".join([f"- {k}: {v}" for k, v in framework.get("fields", {}).items()]) or "- Population, Intervention/Exposure, Comparison, Outcome"
+
     return f"""PANDUAN PRAKTIS META-ANALISIS
 
 Tema:
 {theme}
 
-Meta-analisis adalah cara ilmiah untuk menggabungkan data dari berbagai penelitian independen agar menghasilkan kesimpulan statistik yang lebih kuat. Meta-analisis bukan sekadar mengumpulkan artikel, tetapi hanya memasukkan studi yang memiliki data kuantitatif yang bisa dihitung atau digabungkan.
+Meta-analisis adalah cara ilmiah untuk menggabungkan data dari berbagai penelitian independen guna mendapatkan satu kesimpulan statistik yang lebih kuat. Secara sederhana, meta-analisis seperti menyatukan kepingan puzzle dari berbagai studi agar terlihat gambaran besarnya.
 
-1. Menentukan Pertanyaan Penelitian
+1. MENENTUKAN PERTANYAAN PENELITIAN
 
-Gunakan framework {framework.get('framework', 'PICO')}.
-{field_lines}
+Gunakan kerangka {framework.get('framework', 'PICO')}.
+
+Elemen pertanyaan:
+{fields_text}
 
 Untuk PICO:
 - P atau Population: siapa populasi/subjek yang diteliti.
-- I atau Intervention/Exposure: intervensi, teknologi, perlakuan, atau paparan.
+- I atau Intervention/Exposure: intervensi, teknologi, perlakuan, atau paparan yang diuji.
 - C atau Comparison: pembanding, kontrol, baseline, atau metode konvensional.
 - O atau Outcome: hasil akhir yang ingin diukur.
 
 Contoh untuk precision livestock farming:
-- P: sapi perah, sapi potong, unggas, kambing, atau ternak lain.
+- P: peternakan sapi perah, sapi potong, unggas, kambing, atau ternak lain.
 - I: sensor, IoT, computer vision, machine learning, wearable device, automated monitoring.
-- C: monitoring manual, metode konvensional, tanpa sensor, atau baseline.
-- O: animal welfare, kesehatan ternak, deteksi penyakit, produktivitas, milk yield, feed efficiency, akurasi deteksi.
+- C: metode konvensional, tanpa sensor, manual monitoring, atau baseline.
+- O: kesehatan ternak, animal welfare, deteksi penyakit, produktivitas, milk yield, feed efficiency, akurasi deteksi.
 
-2. Penelusuran Literatur
+2. MELAKUKAN PENELUSURAN LITERATUR
 
-Gunakan database relevan:
-- PubMed, Europe PMC untuk veterinary/animal health.
+Gunakan sumber akademik relevan:
+- PubMed untuk veterinary/animal health.
 - Scopus dan Web of Science untuk artikel Q-level.
 - Crossref dan OpenAlex untuk metadata DOI.
 - Semantic Scholar untuk AI, machine learning, dan computer vision.
-- PLOS dan DOAJ untuk open-access.
+- PLOS, DOAJ, Europe PMC untuk open-access/life sciences.
 - CAB Abstracts/CABI, AGRIS/FAO, USDA PubAg untuk agriculture/livestock.
 - IEEE Xplore untuk IoT, sensor, dan embedded system.
 - ScienceDirect, SpringerLink, Wiley, Taylor & Francis untuk jurnal bereputasi.
 
-Contoh Boolean:
+Gunakan Boolean:
+- AND untuk menggabungkan konsep.
+- OR untuk sinonim.
+- tanda kutip untuk frasa spesifik.
+
+Contoh search string:
 ("precision livestock farming" OR "smart livestock farming" OR "precision dairy farming" OR "livestock monitoring" OR "animal welfare monitoring") AND (sensor* OR IoT OR "machine learning" OR "artificial intelligence" OR "computer vision" OR wearable)
 
-Catat database, tanggal pencarian, search string, jumlah artikel, dan jumlah duplikasi.
+Catat:
+- database yang digunakan.
+- tanggal pencarian.
+- jumlah artikel dari tiap database.
+- search string yang dipakai.
+- jumlah duplikasi.
 
-3. Seleksi Studi / Screening
+3. SELEKSI STUDI / SCREENING
 
-Gunakan kriteria inklusi-eksklusi. Tidak semua artikel bibliografi bisa masuk meta-analisis. Artikel review, editorial, opinion, conceptual paper, atau studi tanpa data kuantitatif biasanya hanya masuk systematic/narrative review, bukan meta-analysis.
+Tidak semua artikel bibliografi bisa masuk meta-analisis. Gunakan kriteria inklusi-eksklusi.
 
-Laporkan dengan PRISMA:
+Kriteria inklusi umum:
+- artikel sesuai tema.
+- studi empiris/kuantitatif.
+- memiliki data outcome.
+- memiliki effect size, standard error, confidence interval, mean-SD-n, event-total, OR/RR, atau korelasi.
+- tahun sesuai batas penelitian.
+
+Kriteria eksklusi umum:
+- tidak sesuai tema.
+- duplikasi.
+- editorial/opinion/letter tanpa data empiris.
+- review konseptual tanpa data kuantitatif.
+- tidak tersedia full-text atau data effect size.
+- outcome terlalu berbeda dan tidak bisa dibandingkan.
+
+Gunakan PRISMA untuk melaporkan:
 - records identified.
 - records after duplicates removed.
 - records screened.
@@ -3999,148 +4039,198 @@ Laporkan dengan PRISMA:
 - studies included in review.
 - studies included in meta-analysis.
 
-4. Ekstraksi Data dan Penilaian Kualitas
+4. EKSTRAKSI DATA DAN PENILAIAN KUALITAS
 
-Ekstraksi data:
-- author, year, title, journal, DOI.
-- population, intervention/exposure, comparison, outcome.
-- n, mean, SD.
+Ekstraksi data minimal:
+- nama penulis.
+- tahun.
+- judul.
+- jurnal.
+- negara/lokasi.
+- populasi.
+- intervensi/paparan.
+- pembanding.
+- outcome.
+- jumlah sampel.
+- mean, SD, n.
 - event dan total.
-- OR/RR/HR/correlation.
-- confidence interval atau standard error.
-- risk of bias domains.
+- odds ratio atau risk ratio.
+- korelasi r dan n.
+- confidence interval.
+- standard error.
+- catatan metode.
 
-Risk of bias tools:
+Risk of bias / quality assessment:
+- randomization atau sampling.
+- blinding/objective measurement.
+- incomplete data.
+- selective reporting.
+- confounding control.
+- sample size adequacy.
+
+Contoh alat:
 - Cochrane Risk of Bias untuk RCT.
 - Newcastle-Ottawa Scale untuk studi observasional.
+- QUADAS-2 untuk studi akurasi diagnostik.
 - ROBINS-I untuk non-randomized intervention studies.
-- QUADAS-2 untuk diagnostic accuracy studies.
-- JBI Critical Appraisal untuk desain lain.
+- JBI Critical Appraisal untuk berbagai desain studi.
 
-5. Analisis Statistik
+5. ANALISIS STATISTIK
+
+Meta-analisis membutuhkan effect size dan standard error.
 
 Jenis effect size:
-- SMD/Hedges g untuk mean, SD, dan n dua kelompok.
+- SMD/Hedges g untuk data mean dan SD dua kelompok.
 - log Odds Ratio untuk data event/non-event.
 - log Risk Ratio untuk data event/total.
 - Fisher z untuk korelasi.
-- effect_size + standard_error jika sudah tersedia.
+- effect_size + standard_error jika sudah tersedia di artikel.
 
-Model:
-- Fixed-effect: jika studi dianggap sangat mirip.
-- Random-effects: jika studi berbeda populasi, desain, outcome, atau konteks. Ini umumnya lebih aman untuk systematic review multi-studi.
+Model analisis:
+- Fixed-effect model: digunakan jika studi dianggap sangat mirip dan variasi hanya karena error sampling.
+- Random-effects model: digunakan jika studi berbeda dalam populasi, metode, outcome, atau konteks. Ini lebih sering dipakai dalam systematic review lintas studi.
 
 Heterogenitas:
-- Q: variasi antar studi.
-- tau²: varians antar studi.
-- I²: proporsi variasi akibat heterogenitas.
-- I² < 30% rendah; 30–60% sedang; >60% tinggi.
+- Q menunjukkan variasi antar studi.
+- tau² menunjukkan varians antar studi.
+- I² menunjukkan persentase variasi yang disebabkan heterogenitas.
+- I² < 30%: rendah.
+- I² 30–60%: sedang.
+- I² > 60%: tinggi.
 
-Jika heterogenitas tinggi, gunakan subgroup analysis, sensitivity analysis, dan jelaskan sumber variasi.
+Jika I² tinggi:
+- cek subgroup.
+- cek desain studi.
+- cek outcome.
+- cek jenis populasi.
+- lakukan sensitivity analysis.
+- jelaskan heterogenitas dalam pembahasan.
 
-6. Forest Plot
+6. FOREST PLOT
 
-Forest plot menampilkan effect size setiap studi, confidence interval, bobot, pooled effect, garis no-effect, dan diamond sebagai efek gabungan. Jika CI pooled tidak melewati no-effect, hasil cenderung signifikan.
+Forest plot menampilkan:
+- effect size tiap studi.
+- confidence interval tiap studi.
+- bobot studi.
+- pooled effect.
+- garis no-effect.
+- diamond sebagai hasil gabungan.
 
-7. Publication Bias
+Interpretasi:
+- jika CI pooled tidak melewati nol untuk SMD/log effect, hasil signifikan.
+- jika CI pooled tidak melewati 1 untuk OR/RR pada skala asli, hasil signifikan.
+- studi dengan CI lebar biasanya memiliki sampel kecil atau ketidakpastian tinggi.
 
-Gunakan funnel plot, Egger test, atau jelaskan keterbatasan jika jumlah studi sedikit. Jika studi kurang dari 10, publication bias sulit dinilai dengan kuat.
+7. PUBLICATION BIAS
 
-8. Pelaporan Q-Level
+Publication bias terjadi karena studi signifikan lebih mudah terbit daripada studi non-signifikan.
+
+Cara menilai:
+- Funnel plot.
+- Egger test.
+- trim-and-fill jika tersedia.
+- cek grey literature atau preprint.
+- cek apakah studi kecil cenderung menghasilkan efek besar.
+
+Catatan:
+- Funnel plot kurang kuat jika jumlah studi kecil.
+- Egger test umumnya lebih bermakna jika studi cukup banyak.
+- Jika studi kurang dari 10, jelaskan keterbatasan publication bias.
+
+8. PELAPORAN HASIL
+
+Laporan meta-analisis sebaiknya memuat:
+- pertanyaan penelitian.
+- database dan search string.
+- PRISMA flow.
+- kriteria inklusi-eksklusi.
+- karakteristik studi.
+- risk of bias.
+- metode effect size.
+- fixed-effect dan random-effects.
+- pooled effect.
+- 95% confidence interval.
+- p-value.
+- Q, tau², I².
+- forest plot.
+- publication bias.
+- sensitivity analysis.
+- keterbatasan.
+- implikasi.
+- kesimpulan.
+
+9. CATATAN UNTUK JURNAL Q-LEVEL
 
 Untuk jurnal Q-level:
-- PRISMA harus jelas.
+- jangan hanya menampilkan hasil otomatis.
+- validasi full-text wajib.
+- risk of bias wajib jelas.
+- PRISMA harus lengkap.
 - search string harus transparan.
-- kriteria inklusi-eksklusi harus rinci.
 - alasan eksklusi harus tersedia.
-- risk of bias harus dinilai.
-- effect size harus dapat direplikasi.
-- jangan memaksakan meta-analysis jika effect size belum cukup.
-- validasi akhir dengan R metafor/meta, RevMan, Stata, JASP, atau Jamovi.
+- meta-analysis tidak boleh dipaksakan jika effect size tidak cukup.
+- jika data effect size kurang, gunakan narrative synthesis dan meta-analysis readiness.
+- gunakan software statistik khusus untuk validasi akhir seperti R metafor/meta, RevMan, Stata, JASP, atau Jamovi.
 """
 
 
 def build_meta_analysis_checklist_table(theme: str) -> List[Dict[str, str]]:
     return [
-        {"step":"1","stage":"Pertanyaan penelitian","required_output":"PICO/PECO/SPIDER + research question","app_tab":"Systematic Review","status":"Perlu dicek"},
-        {"step":"2","stage":"Literature search","required_output":"Database, search string, tanggal, jumlah artikel","app_tab":"Workflow Tema + Sumber Relevan","status":"Perlu dicek"},
-        {"step":"3","stage":"Deduplication","required_output":"Record unik setelah duplikasi dihapus","app_tab":"Bibliografi","status":"Perlu dicek"},
-        {"step":"4","stage":"Screening","required_output":"Included, Excluded, Maybe + alasan","app_tab":"PRISMA & Screening","status":"Perlu dicek"},
-        {"step":"5","stage":"PRISMA flow","required_output":"Identification, screening, eligibility, included","app_tab":"PRISMA & Screening","status":"Perlu dicek"},
-        {"step":"6","stage":"Data extraction","required_output":"Excel ekstraksi full-text","app_tab":"Meta-Analysis","status":"Perlu dicek"},
-        {"step":"7","stage":"Risk of bias","required_output":"ROB table + overall risk","app_tab":"Risk of Bias","status":"Perlu dicek"},
-        {"step":"8","stage":"Effect size","required_output":"SMD/log OR/log RR/Fisher z/effect size + SE","app_tab":"Meta-Analysis","status":"Perlu dicek"},
-        {"step":"9","stage":"Model analysis","required_output":"Fixed-effect + random-effects","app_tab":"Meta-Analysis","status":"Perlu dicek"},
-        {"step":"10","stage":"Heterogeneity","required_output":"Q, tau², I²","app_tab":"Meta-Analysis","status":"Perlu dicek"},
-        {"step":"11","stage":"Forest plot","required_output":"Forest plot / table effect per study","app_tab":"Meta-Analysis","status":"Perlu dicek"},
-        {"step":"12","stage":"Publication bias","required_output":"Funnel plot/Egger or limitation statement","app_tab":"Sensitivity & Bias","status":"Perlu dicek"},
-        {"step":"13","stage":"Sensitivity analysis","required_output":"Leave-one-out / robustness check","app_tab":"Sensitivity & Bias","status":"Perlu dicek"},
-        {"step":"14","stage":"Discussion","required_output":"Interpretasi pooled effect, heterogenitas, ROB, limitation","app_tab":"Jurnal Review Builder","status":"Perlu dicek"},
+        {"step": "1", "stage": "Pertanyaan penelitian", "required_output": "PICO/PECO/SPIDER + research question", "app_tab": "Systematic Review", "status": "Perlu dicek"},
+        {"step": "2", "stage": "Literature search", "required_output": "Database, search string, tanggal pencarian, jumlah artikel", "app_tab": "Workflow Tema + Sumber Relevan", "status": "Perlu dicek"},
+        {"step": "3", "stage": "Deduplication", "required_output": "Record unik setelah duplikasi dihapus", "app_tab": "Bibliografi", "status": "Perlu dicek"},
+        {"step": "4", "stage": "Screening", "required_output": "Included, Excluded, Maybe + alasan", "app_tab": "PRISMA & Screening", "status": "Perlu dicek"},
+        {"step": "5", "stage": "PRISMA flow", "required_output": "Records identified, screened, excluded, included", "app_tab": "PRISMA & Screening", "status": "Perlu dicek"},
+        {"step": "6", "stage": "Data extraction", "required_output": "Excel ekstraksi full-text", "app_tab": "Meta-Analysis", "status": "Perlu dicek"},
+        {"step": "7", "stage": "Risk of bias", "required_output": "ROB table + overall risk", "app_tab": "Risk of Bias", "status": "Perlu dicek"},
+        {"step": "8", "stage": "Effect size", "required_output": "SMD/log OR/log RR/Fisher z/effect size + SE", "app_tab": "Meta-Analysis", "status": "Perlu dicek"},
+        {"step": "9", "stage": "Model analysis", "required_output": "Fixed-effect + random-effects", "app_tab": "Meta-Analysis", "status": "Perlu dicek"},
+        {"step": "10", "stage": "Heterogeneity", "required_output": "Q, tau², I²", "app_tab": "Meta-Analysis", "status": "Perlu dicek"},
+        {"step": "11", "stage": "Forest plot", "required_output": "Forest plot / table effect per study", "app_tab": "Meta-Analysis", "status": "Perlu dicek"},
+        {"step": "12", "stage": "Publication bias", "required_output": "Funnel plot/Egger atau limitation statement", "app_tab": "Sensitivity & Bias", "status": "Perlu dicek"},
+        {"step": "13", "stage": "Sensitivity analysis", "required_output": "Leave-one-out / robustness check", "app_tab": "Sensitivity & Bias", "status": "Perlu dicek"},
+        {"step": "14", "stage": "Discussion", "required_output": "Interpretasi pooled effect, heterogenitas, ROB, limitation", "app_tab": "Jurnal Review Builder", "status": "Perlu dicek"},
     ]
 
 
-def build_meta_analysis_excel_template_rows(theme: str) -> List[Dict[str, str]]:
-    theme = normalize_theme(theme) if "normalize_theme" in globals() else clean(theme)
-    return [
-        {"include":"yes","study_id":"Author 2024","authors":"Author A; Author B","year":"2024","title":f"Example SMD study on {theme}","journal":"Journal Name","doi":"10.xxxx/example","group":theme,"effect_type":"smd","effect_size":"","standard_error":"","n_t":"50","mean_t":"85.2","sd_t":"10.1","n_c":"48","mean_c":"78.4","sd_c":"11.3","event_t":"","total_t":"","event_c":"","total_c":"","non_event_t":"","non_event_c":"","r":"","n":"","outcome":"Primary outcome","population":"Target population","intervention":"Technology/intervention/exposure","comparison":"Control/baseline","notes":"Example SMD row. Replace with full-text data."},
-        {"include":"yes","study_id":"Author 2023","authors":"Author C","year":"2023","title":f"Example correlation study on {theme}","journal":"Journal Name","doi":"","group":theme,"effect_type":"correlation","effect_size":"","standard_error":"","n_t":"","mean_t":"","sd_t":"","n_c":"","mean_c":"","sd_c":"","event_t":"","total_t":"","event_c":"","total_c":"","non_event_t":"","non_event_c":"","r":"0.42","n":"120","outcome":"Association outcome","population":"Target population","intervention":"Exposure/indicator","comparison":"","notes":"Example correlation row."},
-        {"include":"yes","study_id":"Author 2022","authors":"Author D","year":"2022","title":f"Example binary outcome study on {theme}","journal":"Journal Name","doi":"","group":theme,"effect_type":"rr","effect_size":"","standard_error":"","n_t":"","mean_t":"","sd_t":"","n_c":"","mean_c":"","sd_c":"","event_t":"30","total_t":"100","event_c":"45","total_c":"100","non_event_t":"","non_event_c":"","r":"","n":"","outcome":"Binary outcome","population":"Target population","intervention":"Intervention/exposure","comparison":"Control","notes":"Example risk ratio row."},
-    ]
-
-
-def render_meta_analysis_guide_tab():
+def render_meta_analysis_guide_inside_panduan():
+    st.divider()
     st.subheader("📘 Panduan Meta-Analisis")
-    st.caption("Panduan sistematis dari PICO sampai publication bias, disesuaikan dengan workflow aplikasi.")
     theme_default = st.session_state.get("last_theme", "") or "precision livestock farming"
-    theme = st.text_input("Tema", value=theme_default, key="meta_guide_theme")
-    meta_studies = st.session_state.get("meta_studies", [])
+    theme = st.text_input("Tema untuk panduan meta-analisis", value=theme_default, key="meta_guide_inside_panduan")
 
-    tab_steps, tab_check, tab_template, tab_qlevel = st.tabs(["🧭 Langkah", "✅ Checklist", "📊 Template Data", "🏆 Q-Level Notes"])
+    tab_steps, tab_check = st.tabs(["🧭 Langkah Meta-Analisis", "✅ Checklist Meta-Analisis"])
 
     with tab_steps:
-        st.text_area("Panduan lengkap", value=build_meta_analysis_steps_guide(theme), height=650)
+        guide = build_meta_analysis_steps_guide(theme)
+        st.text_area("Panduan lengkap meta-analisis", value=guide, height=650)
+        st.download_button(
+            "📥 Download Panduan Meta-Analisis TXT",
+            data=guide.encode("utf-8"),
+            file_name="panduan_meta_analisis.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
 
     with tab_check:
         checklist = build_meta_analysis_checklist_table(theme)
         st.dataframe(checklist, use_container_width=True, height=520)
         if "rows_to_xlsx" in globals():
-            st.download_button("📥 Download Checklist Meta-Analisis Excel", data=rows_to_xlsx(checklist, ["step","stage","required_output","app_tab","status"], "Checklist Meta"), file_name="checklist_meta_analisis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            st.download_button(
+                "📥 Download Checklist Meta-Analisis Excel",
+                data=rows_to_xlsx(checklist, ["step", "stage", "required_output", "app_tab", "status"], "Checklist Meta"),
+                file_name="checklist_meta_analisis.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
         else:
-            st.download_button("📥 Download Checklist Meta-Analisis CSV", data=safe_csv(checklist, ["step","stage","required_output","app_tab","status"]), file_name="checklist_meta_analisis.csv", mime="text/csv", use_container_width=True)
-
-    with tab_template:
-        rows = build_meta_analysis_excel_template_rows(theme)
-        st.write("### Contoh format data meta-analysis")
-        st.dataframe(rows, use_container_width=True, height=320)
-        if "rows_to_xlsx" in globals():
-            st.download_button("📥 Download Contoh Template Meta-Analisis Excel", data=rows_to_xlsx(rows, META_EXTRACTION_COLUMNS, "Template Meta"), file_name="contoh_template_meta_analisis.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        else:
-            st.download_button("📥 Download Contoh Template Meta-Analisis CSV", data=safe_csv(rows, META_EXTRACTION_COLUMNS), file_name="contoh_template_meta_analisis.csv", mime="text/csv", use_container_width=True)
-        st.info("Setelah file ini diisi dari full-text artikel, upload kembali di tab Meta-Analysis.")
-
-    with tab_qlevel:
-        st.write("### Catatan Q-Level")
-        for n in [
-            "Meta-analysis harus didahului systematic review yang jelas.",
-            "Gunakan PICO/PECO/SPIDER untuk pertanyaan penelitian.",
-            "Laporkan database, search string, dan tanggal pencarian.",
-            "Gunakan PRISMA untuk alur screening.",
-            "Effect size harus dapat direplikasi dari data artikel.",
-            "Risk of bias harus dinilai, bukan hanya disebut.",
-            "Random-effects biasanya lebih aman jika studi heterogen.",
-            "Jika publication bias tidak bisa diuji karena studi sedikit, tuliskan sebagai keterbatasan.",
-        ]:
-            st.write(f"- {n}")
-        if meta_studies:
-            meta_result = run_meta(meta_studies)
-            if meta_result.get("k", 0):
-                main = meta_result["random"]
-                h = meta_result["heterogeneity"]
-                st.success(f"Ada {meta_result['k']} studi valid. Pooled random effect = {main['pooled']:.4f}, I² = {h['I2']:.2f}%.")
-        else:
-            st.warning("Belum ada studi effect size valid. Isi template meta-analysis dari full-text artikel.")
-
-    st.download_button("📥 Download Panduan Meta-Analisis TXT", data=build_meta_analysis_steps_guide(theme).encode("utf-8"), file_name="panduan_meta_analisis.txt", mime="text/plain", use_container_width=True)
+            st.download_button(
+                "📥 Download Checklist Meta-Analisis CSV",
+                data=safe_csv(checklist, ["step", "stage", "required_output", "app_tab", "status"]),
+                file_name="checklist_meta_analisis.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
 
 # =========================================================
