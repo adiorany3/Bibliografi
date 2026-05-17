@@ -16,7 +16,9 @@ APP_TITLE = "Sistem Bibliografi Riset"
 
 COLUMNS = [
     "title", "authors", "year", "journal", "publisher", "doi", "url",
-    "database", "impact_factor", "indexing_status", "verification_reason",
+    "database", "impact_factor", "global_citations", "local_citations",
+    "references", "affiliations", "countries", "document_type",
+    "indexing_status", "verification_reason",
     "abstract", "keywords", "notes"
 ]
 
@@ -159,6 +161,12 @@ def standardize(records: Iterable[Dict[str, object]]) -> List[Dict[str, str]]:
             "url": first(raw, ["url", "link", "links", "record url"]),
             "database": first(raw, ["database", "source database", "index", "web of science index"]),
             "impact_factor": first(raw, ["impact factor", "impact_factor", "jif", "citescore", "sjr"]),
+            "global_citations": first(raw, ["global citations", "global_citations", "citations", "citation count", "cited_by_count", "is-referenced-by-count", "times cited", "tc"]),
+            "local_citations": first(raw, ["local citations", "local_citations", "lc"]),
+            "references": first(raw, ["references", "cited references", "cr", "bibliography", "reference list"]),
+            "affiliations": first(raw, ["affiliations", "affiliation", "institutions", "institution"]),
+            "countries": first(raw, ["countries", "country", "author countries"]),
+            "document_type": first(raw, ["document type", "publication type", "type", "subtype"]),
             "abstract": first(raw, ["abstract", "description", "ab"]),
             "keywords": first(raw, ["keywords", "author keywords", "index keywords", "keyword", "de"]),
             "notes": first(raw, ["notes", "eid", "ut", "accession number", "document type", "type"]),
@@ -276,6 +284,9 @@ def search_crossref(query: str, rows: int, email: str) -> List[Dict[str, str]]:
             "doi": item.get("DOI", ""),
             "url": item.get("URL", ""),
             "database": "Crossref",
+            "global_citations": item.get("is-referenced-by-count", ""),
+            "references": "; ".join(str(ref.get("DOI", ref.get("article-title", ""))) for ref in item.get("reference", [])[:100] if isinstance(ref, dict)),
+            "document_type": item.get("type", ""),
             "abstract": item.get("abstract", ""),
             "notes": item.get("type", ""),
         })
@@ -312,6 +323,8 @@ def search_openalex(query: str, rows: int, email: str) -> List[Dict[str, str]]:
             "doi": doi,
             "url": item.get("id", ""),
             "database": "OpenAlex",
+            "global_citations": item.get("cited_by_count", ""),
+            "document_type": item.get("type", ""),
             "keywords": "; ".join(c.get("display_name", "") for c in item.get("concepts", [])[:8]),
         })
 
@@ -379,7 +392,7 @@ def search_semantic_scholar(query: str, rows: int, email: str) -> List[Dict[str,
     params = {
         "query": query,
         "limit": min(rows, 100),
-        "fields": "title,authors,year,venue,publicationVenue,externalIds,url,abstract,fieldsOfStudy,publicationTypes"
+        "fields": "title,authors,year,venue,publicationVenue,externalIds,url,abstract,fieldsOfStudy,publicationTypes,citationCount"
     }
     headers = {"User-Agent": "BibliografiStreamlit/6.0"}
     r = requests.get("https://api.semanticscholar.org/graph/v1/paper/search", params=params, headers=headers, timeout=25)
@@ -400,6 +413,7 @@ def search_semantic_scholar(query: str, rows: int, email: str) -> List[Dict[str,
             "doi": external.get("DOI", ""),
             "url": item.get("url", ""),
             "database": "Semantic Scholar",
+            "global_citations": item.get("citationCount", ""),
             "abstract": item.get("abstract", ""),
             "keywords": "; ".join(item.get("fieldsOfStudy") or []),
             "notes": "; ".join(item.get("publicationTypes") or []),
@@ -781,6 +795,208 @@ def coauthorship_summary(records: List[Dict[str, str]]) -> Dict[str, object]:
     }
 
 
+
+def safe_int(value: object) -> int:
+    try:
+        return int(float(str(value).replace(",", ".").strip()))
+    except Exception:
+        return 0
+
+
+def split_multi(value: str) -> List[str]:
+    parts = re.split(r";|\||\n", clean(value))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def citation_metrics(records: List[Dict[str, str]]) -> Dict[str, object]:
+    citations = [safe_int(r.get("global_citations", 0)) for r in records]
+    cited = [c for c in citations if c > 0]
+    sorted_cites = sorted(citations, reverse=True)
+    h_index = sum(1 for i, c in enumerate(sorted_cites, 1) if c >= i)
+    g_index = 0
+    total_so_far = 0
+    for i, c in enumerate(sorted_cites, 1):
+        total_so_far += c
+        if total_so_far >= i * i:
+            g_index = i
+    return {
+        "TC": sum(citations),
+        "AC": (sum(citations) / len(records)) if records else 0,
+        "NCP": len(cited),
+        "PCP": (len(cited) / len(records)) if records else 0,
+        "CCP": (sum(cited) / len(cited)) if cited else 0,
+        "h_index": h_index,
+        "g_index": g_index,
+        "i10": sum(1 for c in citations if c >= 10),
+        "top_cited": sorted(records, key=lambda r: safe_int(r.get("global_citations", 0)), reverse=True)[:15],
+    }
+
+
+def performance_table(records: List[Dict[str, str]], unit: str) -> List[Dict[str, object]]:
+    groups: Dict[str, List[Dict[str, str]]] = {}
+    if unit == "authors":
+        for r in records:
+            for a in split_multi(r.get("authors", "")):
+                groups.setdefault(a, []).append(r)
+    elif unit == "journals":
+        for r in records:
+            groups.setdefault(clean(r.get("journal", "Unknown")) or "Unknown", []).append(r)
+    elif unit == "countries":
+        for r in records:
+            for c in split_multi(r.get("countries", "")):
+                groups.setdefault(c, []).append(r)
+    else:
+        for r in records:
+            groups.setdefault(clean(r.get("database", "Unknown")) or "Unknown", []).append(r)
+
+    rows = []
+    for name, items in groups.items():
+        years = sorted({safe_int(x.get("year")) for x in items if safe_int(x.get("year"))})
+        citations = [safe_int(x.get("global_citations", 0)) for x in items]
+        nca = sum(len(split_multi(x.get("authors", ""))) for x in items)
+        tp = len(items)
+        sa = sum(1 for x in items if len(split_multi(x.get("authors", ""))) == 1)
+        ca = sum(1 for x in items if len(split_multi(x.get("authors", ""))) > 1)
+        nay = len(years)
+        tc = sum(citations)
+        ncp = sum(1 for c in citations if c > 0)
+        rows.append({
+            "Unit": name[:90], "TP": tp, "NCA": nca, "SA": sa, "CA": ca,
+            "NAY": nay, "PAY": round(tp / nay, 2) if nay else 0,
+            "TC": tc, "AC": round(tc / tp, 2) if tp else 0,
+            "NCP": ncp, "PCP": round(ncp / tp, 2) if tp else 0,
+            "CCP": round(tc / ncp, 2) if ncp else 0,
+            "CI": round((nca / tp) / tp, 3) if tp else 0,
+            "CC": round(1 - (tp / nca), 3) if nca else 0,
+        })
+    return sorted(rows, key=lambda x: (x["TP"], x["TC"]), reverse=True)[:50]
+
+
+def co_word_network(records: List[Dict[str, str]], limit: int = 30) -> Dict[str, object]:
+    kw_counter = Counter()
+    edges = Counter()
+    for r in records:
+        text_keywords = split_multi(r.get("keywords", ""))
+        if not text_keywords:
+            raw = (r.get("title", "") + " " + r.get("abstract", "")).lower()
+            words = re.findall(r"[a-zA-Z][a-zA-Z\-]{3,}", raw)
+            stop = {"this","that","with","from","have","were","been","analysis","study","research","paper","using","based","results","method","methods"}
+            text_keywords = [w for w in words if w not in stop][:12]
+        kws = list(dict.fromkeys([clean(k).lower() for k in text_keywords if clean(k)]))[:15]
+        for k in kws:
+            kw_counter[k] += 1
+        for i in range(len(kws)):
+            for j in range(i + 1, len(kws)):
+                edges[tuple(sorted([kws[i], kws[j]]))] += 1
+    return {"nodes": kw_counter.most_common(limit), "edges": edges.most_common(limit)}
+
+
+def bibliographic_coupling(records: List[Dict[str, str]], limit: int = 20) -> List[Dict[str, object]]:
+    pairs = []
+    ref_sets = []
+    for r in records:
+        refs = {x.lower() for x in split_multi(r.get("references", "")) if len(x) > 3}
+        ref_sets.append(refs)
+    for i in range(len(records)):
+        for j in range(i + 1, len(records)):
+            shared = ref_sets[i] & ref_sets[j]
+            if shared:
+                pairs.append({
+                    "Paper 1": records[i].get("title", "")[:70],
+                    "Paper 2": records[j].get("title", "")[:70],
+                    "Shared references": len(shared),
+                    "Strength": len(shared),
+                })
+    return sorted(pairs, key=lambda x: x["Strength"], reverse=True)[:limit]
+
+
+def co_citation_analysis(records: List[Dict[str, str]], limit: int = 30) -> Dict[str, object]:
+    ref_count = Counter()
+    co_edges = Counter()
+    for r in records:
+        refs = list(dict.fromkeys([x.lower() for x in split_multi(r.get("references", "")) if len(x) > 3]))[:50]
+        for ref in refs:
+            ref_count[ref] += 1
+        for i in range(len(refs)):
+            for j in range(i + 1, len(refs)):
+                co_edges[tuple(sorted([refs[i], refs[j]]))] += 1
+    return {"top_references": ref_count.most_common(limit), "co_cited_pairs": co_edges.most_common(limit)}
+
+
+def citation_relationships(records: List[Dict[str, str]], limit: int = 20) -> List[Dict[str, object]]:
+    rows = []
+    for r in sorted(records, key=lambda x: safe_int(x.get("global_citations", 0)), reverse=True)[:limit]:
+        rows.append({
+            "Title": r.get("title", "")[:85],
+            "Year": r.get("year", ""),
+            "Journal": r.get("journal", "")[:45],
+            "Global citations": safe_int(r.get("global_citations", 0)),
+            "Local citations": safe_int(r.get("local_citations", 0)),
+            "DOI": r.get("doi", ""),
+        })
+    return rows
+
+
+def network_metrics_summary(records: List[Dict[str, str]]) -> List[Dict[str, object]]:
+    author_papers = Counter()
+    degree = Counter()
+    weighted_degree = Counter()
+    edges = Counter()
+    for r in records:
+        authors = split_multi(r.get("authors", ""))
+        for a in authors:
+            author_papers[a] += 1
+        for i in range(len(authors)):
+            for j in range(i + 1, len(authors)):
+                pair = tuple(sorted([authors[i], authors[j]]))
+                edges[pair] += 1
+    for (a,b), w in edges.items():
+        degree[a] += 1; degree[b] += 1
+        weighted_degree[a] += w; weighted_degree[b] += w
+    rows=[]
+    for a, tp in author_papers.most_common(50):
+        rows.append({
+            "Author": a, "TP": tp,
+            "Degree centrality": degree[a],
+            "Weighted degree": weighted_degree[a],
+            "Approx. eigen/prestige": round((degree[a] * max(1, weighted_degree[a])) ** 0.5, 3),
+        })
+    return rows
+
+
+def methodology_checklist(records: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    m = get_basic_metrics(records)
+    return [
+        {"Step": "1. Define aims and scope", "Output in app": "Formulasi tujuan, scope, keyword, periode, dan database pada tab Metodologi.", "Status": "Siap" if records else "Isi data dulu"},
+        {"Step": "2. Choose techniques", "Output in app": "Performance analysis, citation analysis, co-citation, bibliographic coupling, co-word, co-authorship.", "Status": "Siap"},
+        {"Step": "3. Collect and clean data", "Output in app": f"{m['total']} dokumen, DOI {m['with_doi']}, abstrak {m['with_abstract']}, keyword {m['with_keywords']}.", "Status": "Perlu validasi manual" if m['need'] else "Cukup baik"},
+        {"Step": "4. Run analysis and report", "Output in app": "Tab Insight, Science Mapping, laporan TXT, dan ekspor VOSviewer/CiteSpace.", "Status": "Siap" if records else "Belum ada data"},
+    ]
+
+
+def to_citespace(records: List[Dict[str, str]]) -> str:
+    lines = []
+    for r in records:
+        lines.append("%0 Journal Article")
+        lines.append(f"%T {r.get('title','')}")
+        for a in split_multi(r.get("authors", ""))[:20]:
+            lines.append(f"%A {a}")
+        lines.append(f"%J {r.get('journal','')}")
+        lines.append(f"%D {r.get('year','')}")
+        if r.get("doi"):
+            lines.append(f"%R {r.get('doi')}")
+        if r.get("url"):
+            lines.append(f"%U {r.get('url')}")
+        if r.get("abstract"):
+            lines.append(f"%X {r.get('abstract')[:1000]}")
+        if r.get("keywords"):
+            lines.append(f"%K {r.get('keywords')}")
+        if r.get("references"):
+            for ref in split_multi(r.get("references", ""))[:100]:
+                lines.append(f"%Z REF: {ref}")
+        lines.append("")
+    return "\n".join(lines)
+
 def build_report(records: List[Dict[str, str]]) -> str:
     m = get_basic_metrics(records)
     years = year_distribution(records)
@@ -874,8 +1090,8 @@ with st.sidebar:
             except Exception as exc:
                 st.error(f"Sample gagal dimuat: {exc}")
 
-search_tab, upload_tab, manual_tab, data_tab, insights_tab, export_tab, source_tab, guide_tab = st.tabs([
-    "🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📈 Insight", "📤 Ekspor", "🌐 Sumber", "🚀 Panduan"
+search_tab, upload_tab, manual_tab, data_tab, insights_tab, mapping_tab, method_tab, export_tab, source_tab, guide_tab = st.tabs([
+    "🔎 Cari", "⬆️ Upload", "✍️ Manual", "📊 Data", "📈 Insight", "🧭 Science Mapping", "🧪 Metodologi", "📤 Ekspor", "🌐 Sumber", "🚀 Panduan"
 ])
 
 with search_tab:
@@ -1218,6 +1434,114 @@ with insights_tab:
             use_container_width=True,
         )
 
+
+with mapping_tab:
+    st.subheader("🧭 Science Mapping Lengkap")
+    records = st.session_state.records
+    if not records:
+        st.info("Belum ada data untuk science mapping.")
+    else:
+        st.write("Science mapping mengikuti toolbox bibliometrik: citation analysis, co-citation, bibliographic coupling, co-word, dan co-authorship.")
+        map_tabs = st.tabs(["Citation", "Co-citation", "Bibliographic Coupling", "Co-word", "Co-authorship", "Network Metrics"])
+        with map_tabs[0]:
+            st.write("### Citation Analysis")
+            st.write("Menampilkan publikasi paling berpengaruh berdasarkan global citations jika metadata tersedia.")
+            st.dataframe(citation_relationships(records), use_container_width=True)
+        with map_tabs[1]:
+            st.write("### Co-citation Analysis")
+            cc = co_citation_analysis(records)
+            if cc["top_references"]:
+                st.write("**Referensi paling sering muncul:**")
+                st.dataframe([{"Reference": k[:120], "Frequency": v} for k,v in cc["top_references"]], use_container_width=True)
+                st.write("**Pasangan referensi yang sering dikutip bersama:**")
+                st.dataframe([{"Reference 1": a[:80], "Reference 2": b[:80], "Strength": w} for (a,b),w in cc["co_cited_pairs"]], use_container_width=True)
+            else:
+                st.info("Co-citation membutuhkan kolom references/cited references dari Scopus/WoS/Crossref.")
+        with map_tabs[2]:
+            st.write("### Bibliographic Coupling")
+            bc = bibliographic_coupling(records)
+            if bc:
+                st.dataframe(bc, use_container_width=True)
+            else:
+                st.info("Bibliographic coupling membutuhkan data referensi. Upload CSV/RIS/BibTeX dengan cited references untuk hasil maksimal.")
+        with map_tabs[3]:
+            st.write("### Co-word Analysis")
+            cw = co_word_network(records)
+            left, right = st.columns(2)
+            with left:
+                st.write("**Keyword/term paling sering:**")
+                if cw["nodes"]:
+                    st.bar_chart(dict(cw["nodes"]))
+                else:
+                    st.info("Belum ada keyword/abstrak/judul yang cukup.")
+            with right:
+                st.write("**Pasangan kata/keyword:**")
+                st.dataframe([{"Term 1": a, "Term 2": b, "Co-occurrence": w} for (a,b),w in cw["edges"]], use_container_width=True)
+        with map_tabs[4]:
+            st.write("### Co-authorship Analysis")
+            coauth = coauthorship_summary(records)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Authors", coauth["num_authors"])
+            c2.metric("Collaboration links", coauth["num_collaborations"])
+            c3.metric("Density", f"{coauth['density']:.3f}")
+            st.write("**Kolaborasi terkuat:**")
+            st.dataframe([{"Author 1": a, "Author 2": b, "Strength": w} for (a,b),w in coauth["top_edges"]], use_container_width=True)
+        with map_tabs[5]:
+            st.write("### Network Metrics")
+            st.write("Metrik ringan tanpa NetworkX: degree centrality, weighted degree, dan aproksimasi prestige/eigen.")
+            st.dataframe(network_metrics_summary(records), use_container_width=True)
+
+with method_tab:
+    st.subheader("🧪 Metodologi Bibliometric Analysis")
+    records = st.session_state.records
+    st.write("Tab ini dibuat mengikuti alur jurnal Donthu et al. (2021): menentukan aim & scope, memilih teknik, mengumpulkan/membersihkan data, menjalankan analisis, lalu melaporkan temuan.")
+    setup_tabs = st.tabs(["Aim & Scope", "Technique Toolbox", "Performance Metrics", "Procedure Checklist", "Limitations"])
+    with setup_tabs[0]:
+        st.write("### 1. Define aims and scope")
+        aim = st.text_area("Tujuan studi bibliometrik", value="Mengidentifikasi perkembangan, aktor utama, jurnal utama, struktur intelektual, dan tema riset terkini pada topik yang dikaji.")
+        scope = st.text_area("Scope/kriteria inklusi", value="Artikel jurnal/prosiding relevan, periode tahun tertentu, bersumber dari database kredibel seperti Scopus, WoS, Crossref, OpenAlex, PubMed, Semantic Scholar, DOAJ, arXiv, Europe PMC.")
+        keyword_plan = st.text_area("Rencana search string", value='("bibliometric analysis" OR bibliometrics) AND (topic utama)')
+        st.download_button("📥 Download rancangan metodologi", data=f"AIM:\n{aim}\n\nSCOPE:\n{scope}\n\nSEARCH STRING:\n{keyword_plan}".encode("utf-8"), file_name="rancangan_metodologi_bibliometrik.txt", mime="text/plain")
+    with setup_tabs[1]:
+        st.write("### 2. Bibliometric Analysis Technique Toolbox")
+        st.markdown("""
+| Kategori | Teknik | Output di aplikasi |
+|---|---|---|
+| Performance analysis | TP, NCA, SA, CA, NAY, PAY, TC, AC, CI, CC, NCP, PCP, CCP, h-index, g-index, i10 | Tab Insight & Performance Metrics |
+| Science mapping | Citation analysis | Publikasi paling berpengaruh |
+| Science mapping | Co-citation analysis | Fondasi intelektual dari referensi yang sering dikutip bersama |
+| Science mapping | Bibliographic coupling | Tema saat ini berdasarkan referensi yang sama |
+| Science mapping | Co-word analysis | Tema/topik dari keyword, judul, dan abstrak |
+| Science mapping | Co-authorship analysis | Jaringan kolaborasi penulis |
+| Enrichment | Network metrics, clustering, visualization | Degree, weighted degree, density, ekspor VOSviewer/CiteSpace |
+""")
+    with setup_tabs[2]:
+        st.write("### Performance Analysis Metrics")
+        if records:
+            unit = st.selectbox("Unit analisis", ["authors", "journals", "countries", "database"])
+            st.dataframe(performance_table(records, unit), use_container_width=True)
+            cm = citation_metrics(records)
+            c1,c2,c3,c4,c5 = st.columns(5)
+            c1.metric("TC", cm["TC"])
+            c2.metric("AC", f"{cm['AC']:.2f}")
+            c3.metric("h-index", cm["h_index"])
+            c4.metric("g-index", cm["g_index"])
+            c5.metric("i10", cm["i10"])
+        else:
+            st.info("Tambahkan data terlebih dahulu.")
+    with setup_tabs[3]:
+        st.write("### 4-Step Procedure Checklist")
+        st.dataframe(methodology_checklist(records), use_container_width=True)
+    with setup_tabs[4]:
+        st.write("### Limitasi dan validasi")
+        st.markdown("""
+- Data dari database ilmiah dapat mengandung duplikasi, metadata kosong, atau format referensi yang berbeda.
+- Status Scopus/WoS/high impact di aplikasi adalah kandidat berbasis metadata, bukan validasi resmi.
+- Co-citation dan bibliographic coupling membutuhkan kolom references/cited references agar akurat.
+- Interpretasi cluster tetap perlu dibaca secara substantif, tidak cukup hanya melihat angka.
+- Untuk visualisasi lanjutan, ekspor ke VOSviewer, Gephi, Bibliometrix, atau CiteSpace.
+""")
+
 with export_tab:
     st.subheader("📤 Ekspor Data")
     records = st.session_state.records
@@ -1285,6 +1609,13 @@ with export_tab:
                 "📥 VOSviewer Network (.net)",
                 data=to_vosviewer_net(export_records).encode("utf-8"),
                 file_name="coauthorship_vosviewer.net",
+                mime="text/plain",
+                use_container_width=True,
+            )
+            st.download_button(
+                "📥 CiteSpace/Plain Text (.txt)",
+                data=to_citespace(export_records).encode("utf-8"),
+                file_name="citespace_export.txt",
                 mime="text/plain",
                 use_container_width=True,
             )
