@@ -1151,6 +1151,312 @@ def build_final_summary(theme: str, records: List[Dict[str, str]], screened: Lis
     return "\n".join(lines)
 
 
+
+# =========================================================
+# Final Insight Engine
+# =========================================================
+def pct(part: float, total: float) -> float:
+    return (part / total * 100) if total else 0.0
+
+
+def classify_score(score: float) -> str:
+    if score >= 80:
+        return "Sangat baik"
+    if score >= 60:
+        return "Baik"
+    if score >= 40:
+        return "Cukup"
+    return "Perlu ditingkatkan"
+
+
+def bibliography_quality_score(records: List[Dict[str, str]]) -> Dict[str, object]:
+    total = len(records)
+    if total == 0:
+        return {"score": 0, "label": "Belum ada data", "components": {}}
+
+    m = get_metrics(records)
+    doi_component = min(100, pct(m["with_doi"], total))
+    abstract_component = min(100, pct(m["with_abstract"], total))
+    keyword_component = min(100, pct(m["with_keywords"], total))
+    indexed_component = min(100, pct(m["scopus"] + m["wos"] + m["high"], total))
+    relevance_scores = [safe_float(r.get("theme_relevance_score"), 0) for r in records]
+    relevance_avg = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0
+    relevance_component = min(100, relevance_avg * 12.5)
+
+    score = (
+        doi_component * 0.25
+        + abstract_component * 0.20
+        + keyword_component * 0.15
+        + indexed_component * 0.25
+        + relevance_component * 0.15
+    )
+
+    return {
+        "score": round(score, 1),
+        "label": classify_score(score),
+        "components": {
+            "DOI coverage": round(doi_component, 1),
+            "Abstract coverage": round(abstract_component, 1),
+            "Keyword coverage": round(keyword_component, 1),
+            "Index/high-impact signal": round(indexed_component, 1),
+            "Theme relevance": round(relevance_component, 1),
+        }
+    }
+
+
+def meta_readiness_score(records: List[Dict[str, str]], meta_studies: List[Dict[str, object]]) -> Dict[str, object]:
+    total_records = len(records)
+    k = len(meta_studies)
+
+    if total_records == 0:
+        return {"score": 0, "label": "Belum siap", "reason": "Belum ada bibliografi relevan."}
+
+    format_ready = 100 if total_records > 0 else 0
+    effect_ready = min(100, pct(k, max(total_records, 1)) * 2)
+    sample_ready = 100 if k >= 10 else 70 if k >= 5 else 40 if k >= 2 else 10 if k == 1 else 0
+
+    score = format_ready * 0.25 + effect_ready * 0.35 + sample_ready * 0.40
+
+    if k == 0:
+        reason = "Bibliografi sudah siap diformat, tetapi effect size/SE belum tersedia."
+    elif k < 3:
+        reason = "Meta-analysis bisa diuji coba, tetapi jumlah studi masih sangat kecil."
+    elif k < 10:
+        reason = "Meta-analysis dapat dilakukan, tetapi interpretasi perlu hati-hati karena jumlah studi terbatas."
+    else:
+        reason = "Jumlah studi sudah lebih memadai untuk meta-analysis."
+
+    return {"score": round(score, 1), "label": classify_score(score), "reason": reason}
+
+
+def evidence_strength(records: List[Dict[str, str]], meta_result: Dict[str, object], rob_rows: List[Dict[str, str]]) -> Dict[str, str]:
+    k = meta_result.get("k", 0) if meta_result else 0
+    if k == 0:
+        return {
+            "level": "Belum dapat dinilai",
+            "reason": "Belum ada data effect size/SE valid untuk menghitung meta-analysis."
+        }
+
+    h = meta_result.get("heterogeneity", {})
+    i2 = h.get("I2", 0)
+
+    risk_counts = Counter(r.get("overall_risk", "Unclear") for r in rob_rows)
+    high_risk = risk_counts.get("High risk", 0)
+    low_risk = risk_counts.get("Low risk", 0)
+
+    if k >= 10 and i2 < 50 and high_risk <= k * 0.25:
+        level = "Kuat"
+        reason = "Jumlah studi cukup, heterogenitas tidak tinggi, dan proporsi high risk tidak dominan."
+    elif k >= 5 and i2 < 75:
+        level = "Sedang"
+        reason = "Jumlah studi cukup untuk analisis awal, tetapi heterogenitas/risk of bias masih perlu diperhatikan."
+    else:
+        level = "Terbatas"
+        reason = "Jumlah studi kecil, heterogenitas tinggi, atau risk of bias belum memadai."
+
+    if low_risk == 0 and rob_rows:
+        reason += " Belum ada studi yang dinilai low risk."
+
+    return {"level": level, "reason": reason}
+
+
+def final_recommendations(records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_result: Dict[str, object], rob_rows: List[Dict[str, str]]) -> List[str]:
+    recs = []
+    total = len(records)
+    m = get_metrics(records) if records else {"with_doi": 0, "with_abstract": 0, "with_keywords": 0, "need": 0}
+
+    if total == 0:
+        return ["Jalankan Workflow Tema terlebih dahulu untuk mendapatkan bibliografi sesuai topik."]
+
+    if pct(m["with_doi"], total) < 70:
+        recs.append("Lengkapi DOI karena coverage DOI masih di bawah 70%. DOI membantu deduplikasi dan pelacakan sitasi.")
+    if pct(m["with_abstract"], total) < 60:
+        recs.append("Tambahkan abstrak/full metadata agar screening dan analisis tema lebih akurat.")
+    if m["need"] > total * 0.4:
+        recs.append("Validasi indeks jurnal secara manual di Scopus, Web of Science, JCR, atau SJR karena banyak record masih perlu verifikasi.")
+
+    if screened:
+        excluded = sum(1 for r in screened if r.get("screening_status") == "Excluded")
+        maybe = sum(1 for r in screened if r.get("screening_status") == "Maybe")
+        if maybe > len(screened) * 0.3:
+            recs.append("Banyak artikel berstatus Maybe. Lakukan screening manual judul/abstrak dan full-text.")
+        if excluded > len(screened) * 0.6:
+            recs.append("Mayoritas artikel tereksklusi. Pertimbangkan revisi kata kunci atau perluas sumber pencarian.")
+
+    k = meta_result.get("k", 0) if meta_result else 0
+    if k == 0:
+        recs.append("Meta-analysis belum menghasilkan pooled effect. Isi format ekstraksi effect size/SE dari full-text artikel.")
+    elif k < 5:
+        recs.append("Jumlah studi meta-analysis masih kecil. Tambahkan studi eligible agar hasil lebih stabil.")
+    else:
+        i2 = meta_result.get("heterogeneity", {}).get("I2", 0)
+        if i2 >= 60:
+            recs.append("Heterogenitas tinggi. Jalankan subgroup analysis, cek definisi outcome, dan lakukan sensitivity analysis.")
+        elif i2 >= 30:
+            recs.append("Heterogenitas sedang. Jelaskan kemungkinan sumber variasi antarstudi dalam pembahasan.")
+        else:
+            recs.append("Heterogenitas rendah. Hasil pooled effect relatif konsisten, tetapi tetap validasi risk of bias.")
+
+    if rob_rows:
+        high = sum(1 for r in rob_rows if r.get("overall_risk") == "High risk")
+        unclear = sum(1 for r in rob_rows if "Unclear" in r.get("overall_risk", ""))
+        if high > len(rob_rows) * 0.25:
+            recs.append("Proporsi high risk cukup besar. Sajikan analisis sensitivitas dengan mengecualikan studi high risk.")
+        if unclear > len(rob_rows) * 0.4:
+            recs.append("Banyak risk of bias masih unclear. Lengkapi penilaian dari full-text.")
+
+    return recs or ["Dataset sudah cukup baik. Lanjutkan validasi manual dan penyusunan laporan akhir."]
+
+
+def build_executive_insight(theme: str, records: List[Dict[str, str]], screened: List[Dict[str, str]], meta_studies: List[Dict[str, object]], rob_rows: List[Dict[str, str]]) -> str:
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    q = bibliography_quality_score(records)
+    mr = meta_readiness_score(records, meta_studies)
+    ev = evidence_strength(records, meta_result, rob_rows)
+    prisma = prisma_counts(st.session_state.get("found_total", 0) or len(records), records, screened, meta_studies)
+    recs = final_recommendations(records, screened, meta_result, rob_rows)
+
+    m = get_metrics(records) if records else None
+    years = year_distribution(records) if records else {}
+    period = f"{min(years.keys())}–{max(years.keys())}" if years else "tidak tersedia"
+
+    lines = [
+        "INSIGHT AKHIR OTOMATIS",
+        "",
+        f"Tema: {theme or '-'}",
+        "",
+        "1. Status Dataset",
+        f"- Total referensi relevan: {len(records)}.",
+        f"- Periode publikasi: {period}.",
+    ]
+
+    if m:
+        lines += [
+            f"- DOI coverage: {m['with_doi']} dari {len(records)} ({pct(m['with_doi'], len(records)):.1f}%).",
+            f"- Abstract coverage: {m['with_abstract']} dari {len(records)} ({pct(m['with_abstract'], len(records)):.1f}%).",
+            f"- Kandidat Scopus/WoS/high-impact: {m['scopus'] + m['wos'] + m['high']}.",
+            f"- Tingkat kolaborasi penulis: {m['collab_rate']:.1f}%.",
+        ]
+
+    lines += [
+        "",
+        "2. Kualitas Bibliografi",
+        f"- Skor kualitas bibliografi: {q['score']}/100 ({q['label']}).",
+    ]
+    for k, v in q.get("components", {}).items():
+        lines.append(f"- {k}: {v}/100.")
+
+    lines += [
+        "",
+        "3. PRISMA & Screening",
+        f"- Records identified: {prisma['records_identified']}.",
+        f"- After duplicates: {prisma['records_after_duplicates']}.",
+        f"- Screened: {prisma['records_screened']}.",
+        f"- Excluded: {prisma['records_excluded']}.",
+        f"- Included review: {prisma['studies_included_review']}.",
+        f"- Included meta-analysis: {prisma['studies_included_meta']}.",
+        "",
+        "4. Kesiapan Meta-Analysis",
+        f"- Skor kesiapan meta-analysis: {mr['score']}/100 ({mr['label']}).",
+        f"- Catatan: {mr['reason']}",
+    ]
+
+    if meta_result.get("k", 0):
+        main = meta_result["random"]
+        h = meta_result["heterogeneity"]
+        lines += [
+            f"- Pooled random effect: {main['pooled']:.4f}.",
+            f"- 95% CI: {main['ci'][0]:.4f} sampai {main['ci'][1]:.4f}.",
+            f"- p-value: {main['p']:.6f}.",
+            f"- I²: {h['I2']:.2f}%.",
+        ]
+    else:
+        lines.append("- Pooled effect belum tersedia karena effect size/SE belum cukup.")
+
+    lines += [
+        "",
+        "5. Kekuatan Bukti",
+        f"- Level bukti: {ev['level']}.",
+        f"- Alasan: {ev['reason']}",
+        "",
+        "6. Rekomendasi Tindakan",
+    ]
+    lines += [f"- {r}" for r in recs]
+
+    top_journals = count_by(records, "journal", 5) if records else {}
+    top_keywords = keyword_distribution(records, 8) if records else {}
+    if top_journals:
+        lines += ["", "7. Jurnal Dominan"]
+        lines += [f"- {k}: {v}" for k, v in top_journals.items()]
+    if top_keywords:
+        lines += ["", "8. Keyword Dominan"]
+        lines += [f"- {k}: {v}" for k, v in top_keywords.items()]
+
+    return "\n".join(lines)
+
+
+def render_final_insight_tab():
+    st.subheader("📌 Insight Akhir")
+    records = st.session_state.theme_records or st.session_state.records
+    screened = st.session_state.screened
+    meta_studies = st.session_state.meta_studies
+    rob_rows = st.session_state.rob_rows
+    theme = st.session_state.last_theme
+
+    if not records:
+        st.info("Belum ada data. Jalankan Workflow Tema terlebih dahulu.")
+        return
+
+    meta_result = run_meta(meta_studies) if meta_studies else {"k": 0, "studies": []}
+    q = bibliography_quality_score(records)
+    mr = meta_readiness_score(records, meta_studies)
+    ev = evidence_strength(records, meta_result, rob_rows)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Kualitas Bibliografi", f"{q['score']}/100", q["label"])
+    c2.metric("Kesiapan Meta", f"{mr['score']}/100", mr["label"])
+    c3.metric("Kekuatan Bukti", ev["level"])
+    c4.metric("Studi Meta", meta_result.get("k", 0))
+
+    st.divider()
+
+    left, right = st.columns(2)
+    with left:
+        st.write("### Komponen Kualitas Bibliografi")
+        if q.get("components"):
+            st.bar_chart(q["components"])
+        st.write("### Distribusi Tahun")
+        years = year_distribution(records)
+        if years:
+            st.bar_chart(years)
+        else:
+            st.info("Data tahun belum tersedia.")
+
+    with right:
+        st.write("### Status Screening")
+        if screened:
+            st.bar_chart(dict(Counter(r.get("screening_status", "Unknown") for r in screened)))
+        else:
+            st.info("Screening belum dijalankan.")
+        st.write("### Risk of Bias")
+        if rob_rows:
+            st.bar_chart(dict(Counter(r.get("overall_risk", "Unclear") for r in rob_rows)))
+        else:
+            st.info("Risk of bias belum diisi.")
+
+    st.divider()
+    insight = build_executive_insight(theme, records, screened, meta_studies, rob_rows)
+    st.text_area("Insight naratif otomatis", value=insight, height=520)
+
+    st.download_button(
+        "📥 Download Insight Akhir TXT",
+        data=insight.encode("utf-8"),
+        file_name="insight_akhir_biblio_meta.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
+
+
 # =========================================================
 # Streamlit UI
 # =========================================================
@@ -1189,6 +1495,7 @@ tabs = st.tabs([
     "🧪 Meta-Analysis",
     "⚖️ Risk of Bias",
     "📉 Sensitivity & Bias",
+    "📌 Insight Akhir",
     "📤 Export",
     "📖 Panduan"
 ])
@@ -1538,6 +1845,9 @@ with tabs[5]:
             st.code(f"{s.get('study_id','Study')[:25]:25} effect={yi:.3f} se={se:.3f}")
 
 with tabs[6]:
+    render_final_insight_tab()
+
+with tabs[7]:
     st.subheader("📤 Export")
     records = st.session_state.theme_records or st.session_state.records
     screened = st.session_state.screened
@@ -1557,9 +1867,11 @@ with tabs[6]:
         st.download_button("📥 Format Meta-Analysis CSV", data=safe_csv(meta_format, META_EXTRACTION_COLUMNS), file_name="format_meta_analysis.csv", mime="text/csv", use_container_width=True, disabled=not bool(meta_format))
         st.download_button("📥 Hasil Meta CSV", data=safe_csv(meta_result.get("studies", []), list(meta_result.get("studies", [{}])[0].keys()) if meta_result.get("studies") else META_EXTRACTION_COLUMNS), file_name="hasil_meta_analysis.csv", mime="text/csv", use_container_width=True, disabled=not bool(meta_result.get("studies")))
         st.download_button("📥 Laporan Bibliografi TXT", data=build_biblio_report(records, st.session_state.last_theme).encode("utf-8"), file_name="laporan_bibliografi.txt", mime="text/plain", use_container_width=True, disabled=not bool(records))
+        executive_insight = build_executive_insight(st.session_state.last_theme, records, screened, meta_studies, st.session_state.rob_rows)
         st.download_button("📥 Laporan Akhir TXT", data=final_summary.encode("utf-8"), file_name="laporan_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
+        st.download_button("📥 Insight Akhir TXT", data=executive_insight.encode("utf-8"), file_name="insight_akhir_biblio_meta.txt", mime="text/plain", use_container_width=True)
 
-with tabs[7]:
+with tabs[8]:
     st.subheader("📖 Panduan")
     st.markdown("""
 ### Alur yang disarankan

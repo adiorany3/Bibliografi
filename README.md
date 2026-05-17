@@ -28,3 +28,14 @@ streamlit run app.py
 - Upload semua file ke GitHub
 - Main file: `app.py`
 - Gunakan Python 3.11 atau 3.12 jika tersedia
+
+## Penyempurnaan Insight Akhir
+
+Ditambahkan tab **Insight Akhir**:
+- Skor kualitas bibliografi
+- Skor kesiapan meta-analysis
+- Level kekuatan bukti
+- Ringkasan PRISMA
+- Ringkasan risk of bias
+- Rekomendasi tindakan otomatis
+- Insight naratif siap pakai untuk laporan
