@@ -594,10 +594,18 @@ SOURCE_FUNCTIONS = {
 # Exporters
 # =========================
 def to_csv(records: List[Dict[str, str]]) -> bytes:
+    """Export records safely, even when workflow adds extra fields."""
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=COLUMNS)
+    extra_cols = []
+    for record in records:
+        for key in record.keys():
+            if key not in COLUMNS and key not in extra_cols:
+                extra_cols.append(key)
+    fieldnames = COLUMNS + extra_cols
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
-    writer.writerows(records)
+    for record in records:
+        writer.writerow({col: record.get(col, "") for col in fieldnames})
     return buf.getvalue().encode("utf-8-sig")
 
 

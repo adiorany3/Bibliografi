@@ -110,3 +110,10 @@ Fitur baru:
 - Sistem mencoba membaca effect size dari judul/abstrak jika tersedia.
 - Jika effect size belum cukup, sistem menyediakan file ekstraksi meta-analysis untuk diisi dari full-text.
 - Insight bibliografi dan insight meta-analysis dibuat otomatis.
+
+## Fix Export CSV Tema
+
+Perbaikan:
+- Error `dict contains fields not in fieldnames` sudah diperbaiki.
+- Ekspor CSV sekarang aman meskipun record memiliki kolom tambahan seperti `theme_relevance_score`.
+- Workflow tema tetap menyimpan skor relevansi agar hasil bibliografi sesuai dengan topik pencarian.
