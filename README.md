@@ -152,3 +152,12 @@ Perbaikan:
 - Menambahkan input tema langsung di Review Studio.
 - Menambahkan fallback draft, action plan, writing prompts, Q-level strategy, dan checklist.
 - Render tab Review Studio dipastikan terpanggil sebelum tab Export.
+
+## Panduan Meta-Analisis Praktis
+
+Ditambahkan tab **Panduan Meta**:
+- Langkah meta-analisis dari PICO sampai publication bias
+- Checklist meta-analysis
+- Template data meta-analysis Excel
+- Catatan Q-level untuk pelaporan meta-analysis
+- Export panduan meta-analysis
